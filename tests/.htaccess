@@ -1,0 +1,2 @@
+# Blokir akses web ke direktori tests (berisi PHPUnit phar & kredensial test)
+Require all denied

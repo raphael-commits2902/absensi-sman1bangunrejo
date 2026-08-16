@@ -1,0 +1,442 @@
+<?php
+session_start();
+require_once '../config/database.php';
+
+// Pastikan hanya admin yang bisa mengakses
+if (!isset($_SESSION['role']) || $_SESSION['role'] !== 'admin') {
+    header("Location: ../login.php");
+    exit;
+}
+
+$success = '';
+$error = '';
+$edit_kelas = null;
+
+// Proses Tambah Kelas
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'add') {
+    $name = trim($_POST['name']);
+    if (!empty($name)) {
+        try {
+            $stmt = $pdo->prepare("INSERT INTO kelas (name) VALUES (?)");
+            $stmt->execute([$name]);
+            $success = 'Kelas <strong>' . htmlspecialchars($name) . '</strong> berhasil ditambahkan.';
+        } catch (PDOException $e) {
+            if ($e->errorInfo[1] == 1062) {
+                $error = 'Gagal: Kelas <strong>' . htmlspecialchars($name) . '</strong> sudah terdaftar!';
+            } else {
+                $error = 'Database Error: ' . $e->getMessage();
+            }
+        }
+    } else {
+        $error = 'Nama kelas wajib diisi!';
+    }
+}
+
+// Proses Update Kelas (rename + sinkron ke data siswa)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'update') {
+    $id = intval($_POST['id']);
+    $name = trim($_POST['name']);
+    if (!empty($name)) {
+        try {
+            // Ambil nama kelas lama
+            $stmt_old = $pdo->prepare("SELECT name FROM kelas WHERE id = ?");
+            $stmt_old->execute([$id]);
+            $old_name = $stmt_old->fetchColumn();
+
+            if ($old_name) {
+                $pdo->beginTransaction();
+                // Update di tabel kelas
+                $stmt_k = $pdo->prepare("UPDATE kelas SET name = ? WHERE id = ?");
+                $stmt_k->execute([$name, $id]);
+                // Sinkronkan ke data siswa
+                $stmt_s = $pdo->prepare("UPDATE students SET class = ? WHERE class = ?");
+                $stmt_s->execute([$name, $old_name]);
+                $pdo->commit();
+                $success = 'Kelas <strong>' . htmlspecialchars($old_name) . '</strong> diubah menjadi <strong>' . htmlspecialchars($name) . '</strong>. Data siswa ikut disinkronkan.';
+            } else {
+                $error = 'Kelas tidak ditemukan.';
+            }
+        } catch (PDOException $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            if ($e->errorInfo[1] == 1062) {
+                $error = 'Gagal: Nama kelas <strong>' . htmlspecialchars($name) . '</strong> sudah digunakan!';
+            } else {
+                $error = 'Database Error: ' . $e->getMessage();
+            }
+        }
+    } else {
+        $error = 'Nama kelas wajib diisi!';
+    }
+}
+
+// Proses Hapus Kelas (ditolak jika masih ada siswa)
+if (isset($_GET['action']) && $_GET['action'] === 'delete' && isset($_GET['id'])) {
+    $id_hapus = intval($_GET['id']);
+    try {
+        $stmt_k = $pdo->prepare("SELECT name FROM kelas WHERE id = ?");
+        $stmt_k->execute([$id_hapus]);
+        $name = $stmt_k->fetchColumn();
+
+        if ($name) {
+            $stmt_c = $pdo->prepare("SELECT COUNT(*) FROM students WHERE class = ?");
+            $stmt_c->execute([$name]);
+            $jml_siswa = $stmt_c->fetchColumn();
+
+            if ($jml_siswa > 0) {
+                $error = 'Tidak bisa menghapus kelas <strong>' . htmlspecialchars($name) . '</strong> karena masih ada <strong>' . $jml_siswa . ' siswa</strong> di kelas tersebut.';
+            } else {
+                $pdo->prepare("DELETE FROM kelas WHERE id = ?")->execute([$id_hapus]);
+                $success = 'Kelas <strong>' . htmlspecialchars($name) . '</strong> berhasil dihapus.';
+            }
+        } else {
+            $error = 'Kelas tidak ditemukan.';
+        }
+    } catch (PDOException $e) {
+        $error = 'Database Error: ' . $e->getMessage();
+    }
+}
+
+// Ambil data untuk form edit
+if (isset($_GET['action']) && $_GET['action'] === 'edit' && isset($_GET['id'])) {
+    $id_edit = intval($_GET['id']);
+    $stmt_e = $pdo->prepare("SELECT id, name FROM kelas WHERE id = ?");
+    $stmt_e->execute([$id_edit]);
+    $edit_kelas = $stmt_e->fetch();
+}
+
+// Ambil seluruh kelas + jumlah siswa per kelas
+$stmt = $pdo->query("SELECT k.id, k.name, (SELECT COUNT(*) FROM students s WHERE s.class = k.name) AS jumlah_siswa FROM kelas k ORDER BY k.name ASC");
+$kelas_list = $stmt->fetchAll();
+?>
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Manajemen Kelas - Admin Panel</title>
+    <!-- Google Fonts: Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- FontAwesome 6 CDN -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <style>
+        /* CSS Reset & Variabel Konsisten */
+        :root {
+            --primary: #3b82f6; --primary-hover: #2563eb; --primary-light: #eff6ff;
+            --success: #10b981; --success-light: #d1fae5;
+            --warning: #f59e0b; --warning-light: #fef3c7;
+            --danger: #ef4444; --danger-light: #fee2e2;
+            --dark: #0f172a; --dark-secondary: #1e293b;
+            --gray: #64748b; --bg-light: #f8fafc; --border: #e2e8f0;
+        }
+        
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
+        body { background: var(--bg-light); color: var(--dark-secondary); overflow-x: hidden; }
+        
+        /* Sidebar Styles */
+        .sidebar { width: 260px; background: var(--dark); color: #94a3b8; padding: 24px 20px; position: fixed; height: 100vh; top: 0; left: 0; z-index: 1000; transition: transform 0.3s ease; transform: translateX(-100%); box-shadow: 0 0 40px rgba(0,0,0,0.35); }
+        .sidebar.active { transform: translateX(0); }
+        .sidebar-brand { color: white; font-size: 14px; font-weight: 800; margin-bottom: 40px; display: flex; align-items: center; gap: 12px; padding-left: 10px; }
+        .sidebar-brand i { color: var(--primary); font-size: 24px; }
+        .sidebar-brand img.brand-logo { width: 56px; height: 56px; border-radius: 12px; background: white; padding: 6px; object-fit: contain; }
+        .sidebar-menu { list-style: none; }
+        .sidebar-menu li { margin-bottom: 8px; }
+        .sidebar-menu a { display: flex; align-items: center; gap: 14px; padding: 12px 16px; color: #94a3b8; text-decoration: none; border-radius: 10px; font-weight: 500; transition: all 0.2s ease; }
+        .sidebar-menu a i { font-size: 18px; width: 24px; text-align: center; }
+        .sidebar-menu a:hover, .sidebar-menu a.active { background: var(--dark-secondary); color: white; }
+        
+        /* Submenu Absensi */
+        .submenu-arrow { margin-left: auto; font-size: 12px; transition: transform 0.3s ease; }
+        .has-submenu.open .submenu-arrow { transform: rotate(180deg); }
+        .submenu { list-style: none; display: none; margin: 2px 0 6px; padding-left: 12px; }
+        .has-submenu.open .submenu { display: block; }
+        .submenu a { padding: 10px 12px; font-size: 14px; }
+        .submenu a:hover, .submenu a.active { background: var(--dark-secondary); color: white; }
+        
+        /* Main Content */
+        .main-content { margin-left: 0; padding: 30px 40px; min-height: 100vh; }
+        
+        /* Navbar */
+        .navbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; background: white; padding: 16px 24px; border-radius: 16px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
+        .navbar-left { display: flex; align-items: center; gap: 16px; }
+        .navbar h2 { font-size: 20px; font-weight: 700; color: var(--dark); }
+        .btn-menu { display: block; background: none; border: none; font-size: 24px; color: var(--dark); cursor: pointer; }
+        .user-profile { display: flex; align-items: center; gap: 12px; font-weight: 600; background: var(--bg-light); padding: 8px 16px; border-radius: 30px; }
+        .user-profile i { color: var(--primary); font-size: 20px; }
+        
+        /* Alert Message */
+        .alert { padding: 16px; border-radius: 12px; font-size: 14px; margin-bottom: 24px; font-weight: 500; border-left: 4px solid; display: flex; align-items: flex-start; gap: 12px; line-height: 1.5; }
+        .alert i { font-size: 18px; margin-top: 2px; }
+        .alert.success { background: var(--success-light); border-left-color: var(--success); color: #065f46; }
+        .alert.danger { background: var(--danger-light); border-left-color: var(--danger); color: #991b1b; }
+        
+        /* Form Panel */
+        .form-panel { background: white; padding: 30px; border-radius: 16px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); max-width: 550px; }
+        .form-panel h3 { font-size: 18px; font-weight: 700; margin-bottom: 20px; color: var(--dark); display: flex; align-items: center; gap: 10px; }
+        .form-panel h3 i { color: var(--primary); }
+        .form-group { margin-bottom: 18px; }
+        .form-group label { display: block; margin-bottom: 8px; color: var(--gray); font-weight: 600; font-size: 14px; }
+        .form-group input { width: 100%; padding: 12px 16px; border: 2px solid var(--border); border-radius: 10px; font-size: 15px; color: var(--dark-secondary); transition: all 0.3s ease; background: var(--bg-light); outline: none; }
+        .form-group input:focus { border-color: var(--primary); background: white; box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.1); }
+        .btn-save { padding: 13px 24px; background: var(--primary); color: white; border: none; border-radius: 10px; font-size: 15px; font-weight: 700; cursor: pointer; transition: all 0.2s ease; width: 100%; display: flex; justify-content: center; align-items: center; gap: 10px; }
+        .btn-save:hover { background: var(--primary-hover); }
+        .btn-cancel { width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 12px; background: white; color: var(--gray); border: 2px solid var(--border); border-radius: 10px; font-weight: 700; cursor: pointer; font-size: 14px; text-decoration: none; margin-top: 10px; }
+        .btn-cancel:hover { background: var(--bg-light); }
+        
+        /* Data Panel & Table */
+        .data-panel { background: white; padding: 30px; border-radius: 16px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); margin-top: 30px; }
+        .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 15px; }
+        .panel-header h3 { font-size: 18px; font-weight: 700; color: var(--dark); }
+        table { width: 100%; border-collapse: collapse; text-align: left; }
+        th { padding: 14px; background: var(--bg-light); color: var(--gray); font-weight: 600; font-size: 14px; border-bottom: 2px solid var(--border); }
+        td { padding: 14px; border-bottom: 1px solid var(--border); font-size: 15px; }
+        tbody tr:hover td { background: var(--bg-light); }
+        .badge-count { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 30px; font-size: 13px; font-weight: 700; background: var(--primary-light); color: var(--primary); }
+        .badge-count.warn { background: var(--warning-light); color: var(--warning); }
+        
+        /* Action Buttons */
+        .btn-action { display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; text-decoration: none; cursor: pointer; transition: all 0.2s ease; margin-right: 6px; border: 1px solid transparent; }
+        .btn-action.edit { background: var(--warning-light); color: var(--warning); }
+        .btn-action.edit:hover { border-color: var(--warning); background: white; }
+        .btn-action.delete { background: var(--danger-light); color: var(--danger); }
+        .btn-action.delete:hover { border-color: var(--danger); background: white; }
+        
+        /* Grid Dua Kolom */
+        .grid-panel { display: grid; grid-template-columns: 1fr 1.6fr; gap: 30px; align-items: start; }
+        
+        /* Mobile Overlay */
+        .sidebar-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 999; opacity: 0; transition: opacity 0.3s; }
+        .sidebar-overlay.active { display: block; opacity: 1; }
+        
+        /* Responsif (Mobile & Tablet) */
+        @media(max-width: 992px) {
+            .main-content { padding: 20px; }
+            .navbar h2 { font-size: 18px; }
+            .grid-panel { grid-template-columns: 1fr; }
+            .data-panel { margin-top: 0; }
+        }
+    
+
+        /* Header Atas (satu oval, lembut) */
+        .top-header { position: relative; z-index: 1500; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 16px 20px 0; padding: 10px 14px; border-radius: 999px; background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%); border: 1px solid rgba(255,255,255,0.18); box-shadow: 0 12px 30px -10px rgba(37, 99, 235, 0.6); transition: margin-left 0.3s ease; }
+        .top-header.active { margin-left: 260px; }
+        .top-brand { display: flex; align-items: center; gap: 12px; text-decoration: none; color: white; cursor: pointer; }
+        .top-brand img { width: 42px; height: 42px; border-radius: 50%; background: white; padding: 4px; object-fit: contain; box-shadow: 0 2px 8px rgba(0,0,0,0.2); }
+        .top-brand h1 { color: white; font-size: 16px; font-weight: 800; letter-spacing: 0.4px; margin: 0; white-space: nowrap; }
+        .top-header .user-profile { background: rgba(255,255,255,0.15); color: white; box-shadow: none; padding: 8px 16px; border-radius: 999px; }
+        .top-header .user-profile i { color: white; }
+        .top-header .user-profile span { color: white; }
+
+        /* Dropdown Profil */
+        .top-header .user-profile { position: relative; cursor: pointer; }
+        .profile-menu { display: none; position: absolute; top: calc(100% + 12px); right: 0; background: white; border-radius: 14px; box-shadow: 0 12px 32px rgba(0,0,0,0.18); min-width: 200px; padding: 8px; z-index: 2000; }
+        .profile-menu.show { display: block; }
+        .profile-menu-name { padding: 10px 14px; font-weight: 700; color: var(--dark); font-size: 14px; border-bottom: 1px solid var(--border); margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .profile-menu-logout { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 10px 16px; border-radius: 999px; color: #dc2626; font-weight: 700; font-size: 14px; text-decoration: none; background: #fee2e2; }
+        .profile-menu-logout:hover { background: #dc2626; color: white; }
+
+        /* Header responsif: panjang menyesuaikan desktop/mobile */
+        @media (max-width: 576px) {
+            .top-header { margin: 12px 12px 0; padding: 8px 10px; gap: 8px; }
+            .top-header.active { padding: 6px 8px; }
+            .top-brand h1 { display: none; }
+            .top-brand img { width: 38px; height: 38px; }
+            .top-header .user-profile span { display: inline; }
+        }
+
+</style>
+</head>
+<body>
+    <!-- Header Atas -->
+    <header class="top-header">
+        <a href="index" class="top-brand">
+            <img src="../assets/logo_sman1.png" alt="Logo SMAN 1 Bangunrejo">
+            <h1>Absensi SMAN 1 Bangunrejo</h1>
+        </a>
+                <div class="user-profile" onclick="toggleProfileMenu(event)">
+            <i class="fa-solid fa-circle-user"></i>
+            <span>Administrator</span>
+            <i class="fa-solid fa-chevron-down" style="font-size: 11px; opacity: 0.8;"></i>
+            <div class="profile-menu" id="profileMenu">
+                <div class="profile-menu-name">Administrator</div>
+                <a href="../logout" class="profile-menu-logout"><i class="fa-solid fa-right-from-bracket"></i> Logout</a>
+            </div>
+        </div>
+    </header>
+
+    <!-- Mobile Overlay -->
+    <div class="sidebar-overlay" id="overlay" onclick="toggleSidebar()"></div>
+
+    <!-- Sidebar -->
+    <div class="sidebar" id="sidebar">
+        <div class="sidebar-brand">
+            <img src="../assets/logo_sman1.png" alt="Logo SMAN 1 Bangunrejo" class="brand-logo"> <span>Absensi SMAN 1 Bangunrejo</span>
+        </div>
+        <ul class="sidebar-menu">
+            <li><a href="index"><i class="fa-solid fa-chart-pie"></i> <span>Dashboard</span></a></li>
+            <li class="has-submenu">
+                <a href="javascript:void(0)" onclick="toggleSubmenu(this)">
+                    <i class="fa-solid fa-clipboard-check"></i> <span>Absensi</span>
+                    <i class="fa-solid fa-chevron-down submenu-arrow"></i>
+                </a>
+                <ul class="submenu">
+                    <li><a href="scan?type=hadir"><i class="fa-solid fa-right-to-bracket"></i> <span>Absen Hadir</span></a></li>
+                    <li><a href="scan?type=pulang"><i class="fa-solid fa-right-from-bracket"></i> <span>Absen Pulang</span></a></li>
+                    <li><a href="scan?type=sholat"><i class="fa-solid fa-mosque"></i> <span>Absen Sholat</span></a></li>
+                    <li><a href="waktu_absensi"><i class="fa-solid fa-clock"></i> <span>Waktu Absensi</span></a></li>
+                </ul>
+            </li>
+            <li><a href="data_siswa"><i class="fa-solid fa-users"></i> <span>Data Siswa</span></a></li>
+            <li><a href="kelas" class="active"><i class="fa-solid fa-school"></i> <span>Kelas</span></a></li>
+            <li><a href="cetak_kartu"><i class="fa-solid fa-id-card"></i> <span>Cetak Kartu Pelajar</span></a></li>
+            <li><a href="tambah_guru"><i class="fa-solid fa-user-plus"></i> <span>Tambah Guru</span></a></li>
+            <li><a href="scan"><i class="fa-solid fa-camera"></i> <span>Scan QR Code</span></a></li>
+            <li><a href="input_absen"><i class="fa-solid fa-clipboard-user"></i> <span>Input Manual</span></a></li>
+            <li><a href="laporan"><i class="fa-solid fa-file-lines"></i> <span>Laporan Absensi</span></a></li>
+        </ul>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+        <!-- Top Navbar -->
+        <div class="navbar">
+            <div class="navbar-left">
+                <button class="btn-menu" onclick="toggleSidebar()">
+                    <i class="fa-solid fa-bars"></i>
+                </button>
+                <h2>Manajemen Kelas</h2>
+            </div>
+            
+        </div>
+
+        <?php if(!empty($success)): ?>
+            <div class="alert success">
+                <i class="fa-solid fa-circle-check"></i>
+                <div><?= $success ?></div>
+            </div>
+        <?php endif; ?>
+        
+        <?php if(!empty($error)): ?>
+            <div class="alert danger">
+                <i class="fa-solid fa-triangle-exclamation"></i>
+                <div><?= $error ?></div>
+            </div>
+        <?php endif; ?>
+
+        <div class="grid-panel">
+            <!-- Form Tambah / Edit Kelas -->
+            <div class="form-panel">
+                <?php if(!empty($edit_kelas)): ?>
+                    <h3><i class="fa-solid fa-pen-to-square"></i> Edit Kelas: <?= htmlspecialchars($edit_kelas['name']) ?></h3>
+                    <form method="POST" action="kelas">
+                        <input type="hidden" name="action" value="update">
+                        <input type="hidden" name="id" value="<?= (int)$edit_kelas['id'] ?>">
+                        <div class="form-group">
+                            <label>Nama Kelas Baru</label>
+                            <input type="text" name="name" value="<?= htmlspecialchars($edit_kelas['name']) ?>" required autocomplete="off" placeholder="Contoh: XII IPS 1">
+                        </div>
+                        <button type="submit" class="btn-save"><i class="fa-solid fa-floppy-disk"></i> Simpan Perubahan</button>
+                        <a href="kelas" class="btn-cancel"><i class="fa-solid fa-xmark"></i> Batal</a>
+                    </form>
+                    <div style="margin-top: 15px; font-size: 13px; color: var(--gray); background: var(--primary-light); padding: 12px; border-radius: 10px;">
+                        <i class="fa-solid fa-circle-info" style="color: var(--primary); margin-right: 6px;"></i>
+                        Mengganti nama kelas otomatis menyinkronkan ke data siswa &amp; wali kelas.
+                    </div>
+                <?php else: ?>
+                    <h3><i class="fa-solid fa-school"></i> Tambah Kelas Baru</h3>
+                    <form method="POST" action="kelas">
+                        <input type="hidden" name="action" value="add">
+                        <div class="form-group">
+                            <label>Nama Kelas</label>
+                            <input type="text" name="name" required autocomplete="off" placeholder="Contoh: XII IPS 1">
+                        </div>
+                        <button type="submit" class="btn-save"><i class="fa-solid fa-plus"></i> Tambah Kelas</button>
+                    </form>
+                    <div style="margin-top: 15px; font-size: 13px; color: var(--gray); background: var(--primary-light); padding: 12px; border-radius: 10px;">
+                        <i class="fa-solid fa-circle-info" style="color: var(--primary); margin-right: 6px;"></i>
+                        Kelas yang terdaftar dipakai di form siswa, wali kelas, dan laporan agar data tetap rapi &amp; konsisten.
+                    </div>
+                <?php endif; ?>
+            </div>
+
+            <!-- Daftar Kelas -->
+            <div class="data-panel">
+                <div class="panel-header">
+                    <h3><i class="fa-solid fa-list" style="color: var(--primary); margin-right: 8px;"></i> Daftar Kelas</h3>
+                    <span class="badge-count"><?= count($kelas_list) ?> Kelas Terdaftar</span>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>No.</th>
+                            <th>Nama Kelas</th>
+                            <th>Jumlah Siswa</th>
+                            <th>Aksi</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php if(empty($kelas_list)): ?>
+                            <tr>
+                                <td colspan="4" style="text-align: center; color: var(--gray); padding: 30px;">
+                                    <i class="fa-solid fa-school-circle-xmark" style="font-size: 32px; color: #cbd5e1; margin-bottom: 10px; display: block;"></i>
+                                    Belum ada kelas terdaftar. Tambahkan kelas di form sebelah kiri.
+                                </td>
+                            </tr>
+                        <?php else: ?>
+                            <?php $no = 1; foreach($kelas_list as $k): ?>
+                                <tr>
+                                    <td><?= $no++ ?></td>
+                                    <td><strong><?= htmlspecialchars($k['name']) ?></strong></td>
+                                    <td>
+                                        <span class="badge-count <?= $k['jumlah_siswa'] > 0 ? '' : 'warn' ?>">
+                                            <i class="fa-solid fa-user-graduate"></i> <?= $k['jumlah_siswa'] ?> Siswa
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <a href="kelas?action=edit&id=<?= $k['id'] ?>" class="btn-action edit">
+                                            <i class="fa-solid fa-pen-to-square"></i> Edit
+                                        </a>
+                                        <a href="kelas?action=delete&id=<?= $k['id'] ?>" class="btn-action delete" onclick="return confirm('Hapus kelas <?= htmlspecialchars(addslashes($k['name'])) ?>? Kelas yang masih memiliki siswa tidak dapat dihapus.')">
+                                            <i class="fa-solid fa-trash-can"></i> Hapus
+                                        </a>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Script Interaksi Mobile -->
+    <script>
+        function toggleSidebar() {
+            document.getElementById('sidebar').classList.toggle('active');
+            document.getElementById('overlay').classList.toggle('active');
+            document.querySelector('.top-header').classList.toggle('active');
+        }
+
+        function toggleSubmenu(el) {
+            el.closest('.has-submenu').classList.toggle('open');
+        }
+    </script>
+
+
+    <!-- Footer -->
+    <footer style="text-align: center; padding: 18px; color: #64748b; font-size: 13px; border-top: 1px solid rgba(100,116,139,0.2); margin-top: 24px;">
+        Absensi SMAN 1 Bangunrejo &copy; <?= date('Y') ?>
+    </footer>
+
+    <script>
+        function toggleProfileMenu(e) {
+            e.stopPropagation();
+            document.getElementById('profileMenu').classList.toggle('show');
+        }
+        document.addEventListener('click', function () {
+            var m = document.getElementById('profileMenu');
+            if (m) m.classList.remove('show');
+        });
+    </script>
+</body>
+</html>

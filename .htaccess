@@ -1,0 +1,15 @@
+Options -Indexes
+RewriteEngine On
+
+# Keamanan produksi: matikan tampilan error ke pengunjung (lihat error_log server)
+php_flag display_errors Off
+php_flag log_errors On
+
+# Blokir akses langsung ke file sensitif
+<FilesMatch "\.(sql|bak|log|md)$">
+    Require all denied
+</FilesMatch>
+
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^([a-zA-Z0-9_]+/)?([a-zA-Z0-9_]+)$ $1$2.php [L]

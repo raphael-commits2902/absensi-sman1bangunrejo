@@ -1,0 +1,2 @@
+# Blokir akses web langsung ke direktori config (hanya boleh via include PHP)
+Require all denied

@@ -1,0 +1,18 @@
+# Data pribadi siswa — JANGAN pernah di-commit
+absensi_sman1bangunrejo.sql
+assets/foto_siswa/
+
+# File deploy & arsip
+*.zip
+*.bak
+
+# Log
+*.log
+
+# Cache & binary test
+tests/.phpunit.cache/
+tests/bin/
+
+# OS
+Thumbs.db
+Desktop.ini
