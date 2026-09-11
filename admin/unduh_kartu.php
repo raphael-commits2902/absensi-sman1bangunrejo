@@ -15,6 +15,46 @@ class PDF_Kartu extends FPDF
 {
     protected $extgstates = array();
 
+    // Ellipse (FPDF core tidak punya) — 4 kurva Bezier, raw PDF operator
+    function ellipse($x, $y, $w, $h, $style = 'D')
+    {
+        $k = $this->k;
+        $hp = $this->h;
+        $kappa = 0.5522847498;
+        $cx = $x + $w / 2;
+        $cy = $y + $h / 2;
+        $ox = ($w / 2) * $kappa;
+        $oy = ($h / 2) * $kappa;
+        $op = sprintf(
+            '%.2F %.2F m ' .
+            '%.2F %.2F %.2F %.2F %.2F %.2F c ' . // atas -> kanan
+            '%.2F %.2F %.2F %.2F %.2F %.2F c ' . // kanan -> bawah
+            '%.2F %.2F %.2F %.2F %.2F %.2F c ' . // bawah -> kiri
+            '%.2F %.2F %.2F %.2F %.2F %.2F c ',  // kiri -> atas
+            $cx * $k, ($hp - $y) * $k,
+            ($cx + $ox) * $k, ($hp - $y) * $k,
+            ($x + $w) * $k, ($hp - ($cy - $oy)) * $k,
+            ($x + $w) * $k, ($hp - $cy) * $k,
+            ($x + $w) * $k, ($hp - ($cy + $oy)) * $k,
+            ($cx + $ox) * $k, ($hp - ($y + $h)) * $k,
+            $cx * $k, ($hp - ($y + $h)) * $k,
+            ($cx - $ox) * $k, ($hp - ($y + $h)) * $k,
+            $x * $k, ($hp - ($cy + $oy)) * $k,
+            $x * $k, ($hp - $cy) * $k,
+            $x * $k, ($hp - ($cy - $oy)) * $k,
+            ($cx - $ox) * $k, ($hp - $y) * $k,
+            $cx * $k, ($hp - $y) * $k
+        );
+        if ($style === 'F') {
+            $op .= 'f';
+        } elseif ($style === 'DF') {
+            $op .= 'B';
+        } else {
+            $op .= 'S';
+        }
+        $this->_out($op);
+    }
+
     function SetAlpha($alpha, $bm = 'Normal')
     {
         $gs = $this->AddExtGState(array('ca' => $alpha, 'CA' => $alpha, 'BM' => '/' . $bm));
@@ -111,12 +151,30 @@ function to_jpeg($src, $maxW, $maxH)
     $nw = max(1, round($w * $scale));
     $nh = max(1, round($h * $scale));
     $out = imagecreatetruecolor($nw, $nh);
-    $white = imagecolorallocate($out, 255, 255, 255);
-    imagefill($out, 0, 0, $white);
+    // Preserve alpha bila source punya transparansi (logo, ikon, ttd);
+    // foto biasa (tanpa alpha) tetap berlatar putih.
+    $hasAlpha = false;
+    $stepX = max(1, intdiv($w, 40));
+    $stepY = max(1, intdiv($h, 40));
+    for ($yy = 0; $yy < $h && !$hasAlpha; $yy += $stepY) {
+        for ($xx = 0; $xx < $w && !$hasAlpha; $xx += $stepX) {
+            if (((imagecolorat($im, $xx, $yy) & 0x7F000000) >> 24) >= 100) {
+                $hasAlpha = true;
+            }
+        }
+    }
+    if ($hasAlpha) {
+        imagesavealpha($out, true);
+        imagealphablending($out, false);
+        imagefilledrectangle($out, 0, 0, $nw, $nh, imagecolorallocatealpha($out, 0, 0, 0, 127));
+    } else {
+        imagefill($out, 0, 0, imagecolorallocate($out, 255, 255, 255));
+    }
+    imagealphablending($out, true);
     imagecopyresampled($out, $im, 0, 0, 0, 0, $nw, $nh, $w, $h);
     imagedestroy($im);
-    $tmp = tempnam(sys_get_temp_dir(), 'kartu') . '.jpg';
-    imagejpeg($out, $tmp, 90);
+    $tmp = tempnam(sys_get_temp_dir(), 'kartu') . '.png';
+    imagepng($out, $tmp, 9);
     imagedestroy($out);
     return $tmp;
 }
@@ -159,8 +217,11 @@ function grad_color($t)
 }
 
 // Garis putus-putus
-function dashed_line($pdf, $x1, $y, $x2, $lw, $gap)
+function dashed_line($pdf, $x1, $y, $x2, $lw, $gap, $cr = null, $cg = null, $cb = null)
 {
+    if ($cr !== null) {
+        $pdf->SetDrawColor($cr, $cg, $cb);
+    }
     $x = $x1;
     while ($x < $x2) {
         $end = min($x + $lw, $x2);
@@ -197,7 +258,8 @@ $cDark = array(15, 23, 42);
 $cBlueDark = array(30, 58, 138);
 $cBlue = array(59, 130, 246);
 $cLineLight = array(147, 197, 253);
-$cBg = array(248, 250, 252);
+$cBg = array(241, 241, 241);       // band judul: putih samar abu-abu (match HTML #f1f1f1)
+$cFooter = array(248, 250, 252);   // band footer tetap #f8fafc (match HTML)
 $cGold = array(251, 191, 36);
 $cGray = array(148, 163, 184);
 $cBody = array(71, 85, 105);
@@ -213,7 +275,7 @@ $logo_in = 8.2;  // logo di dalam badge
 $logo_pad = 0.53;
 $photo_w = 13.19; // foto
 $photo_h = 16.4;
-$qr_size = 12.84; // QR
+$qr_size = 15.0; // QR (diperbesar lagi; bottom y+37.09, gap 0.31mm di atas tinta ttd y+37.4)
 $pad = 2.85;
 
 foreach ($students as $idx => $s) {
@@ -225,28 +287,23 @@ foreach ($students as $idx => $s) {
     $x = 12 + ($slot % 2) * 95.6;
     $y = 8 + intval($slot / 2) * 70;
 
-    // ---- Bingkai kartu ----
-    $pdf->SetLineWidth(0.3);
-    $pdf->SetDrawColor($cDark[0], $cDark[1], $cDark[2]);
-    $pdf->Rect($x, $y, $CW, $CH);
+    // (bingkai digambar TERAKHIR di akhir loop agar tidak tertimpa rect kop/band/footer)
 
     // ---- KOP: gradasi ----
     $steps = 60;
     $stripe = $CW / $steps;
+    $stripeOver = 0; // overdraw 0.5mm dihapus: background kop jangan melewati bingkai kanan
     for ($i = 0; $i < $steps; $i++) {
         $c = grad_color($i / $steps);
         $pdf->SetFillColor($c[0], $c[1], $c[2]);
-        $pdf->Rect($x + $i * $stripe, $y, $stripe + 0.5, $kopH, 'F');
+        $pdf->Rect($x + $i * $stripe, $y, $stripe + $stripeOver, $kopH, 'F');
     }
     // Garis bawah kop
     $pdf->SetLineWidth(0.5);
     $pdf->SetDrawColor($cLineLight[0], $cLineLight[1], $cLineLight[2]);
     $pdf->Line($x, $y + $kopH, $x + $CW, $y + $kopH);
 
-    // Badge putih + logo kiri & kanan
-    $pdf->SetFillColor(255, 255, 255);
-    $pdf->Rect($x + 1.35, $y + 1.5, $badge, $badge, 'F');
-    $pdf->Rect($x + $CW - 1.35 - $badge, $y + 1.5, $badge, $badge, 'F');
+    // Logo kiri & kanan langsung di atas gradasi (background putih dihapus, logo PNG transparan)
     if ($logo_lampung) {
         $pdf->Image($logo_lampung, $x + 1.35 + $logo_pad, $y + 1.5 + $logo_pad, $logo_in, $logo_in);
     }
@@ -254,30 +311,54 @@ foreach ($students as $idx => $s) {
         $pdf->Image($logo_sman1, $x + $CW - 1.35 - $badge + $logo_pad, $y + 1.5 + $logo_pad, $logo_in, $logo_in);
     }
 
-    // Teks kop (tengah)
+    // Teks kop (tengah, diperbesar)
     $pdf->SetTextColor(255, 255, 255);
-    $pdf->SetFont('Helvetica', 'B', 6.5);
-    $pdf->SetXY($x, $y + 2.2);
-    $pdf->Cell($CW, 2.3, 'PEMERINTAHAN PROVINSI LAMPUNG', 0, 0, 'C');
+    $pdf->SetFont('Helvetica', 'B', 8);
+    $pdf->SetXY($x, $y + 2.0);
+    $pdf->Cell($CW, 2.6, 'PEMERINTAHAN PROVINSI LAMPUNG', 0, 0, 'C');
 
     $pdf->SetTextColor(191, 219, 254);
-    $pdf->SetFont('Helvetica', '', 6);
-    $pdf->SetXY($x, $y + 4.7);
-    $pdf->Cell($CW, 2.1, 'DINAS PENDIDIKAN DAN KEBUDAYAAN', 0, 0, 'C');
+    $pdf->SetFont('Helvetica', '', 7);
+    $pdf->SetXY($x, $y + 4.8);
+    $pdf->Cell($CW, 2.3, 'DINAS PENDIDIKAN DAN KEBUDAYAAN', 0, 0, 'C');
 
     $pdf->SetTextColor($cGold[0], $cGold[1], $cGold[2]);
-    $pdf->SetFont('Helvetica', 'B', 6.5);
-    $pdf->SetXY($x, $y + 7.2);
-    $pdf->Cell($CW, 2.3, 'SMAN 1 BANGUNREJO', 0, 0, 'C');
+    $pdf->SetFont('Helvetica', 'B', 8);
+    $pdf->SetXY($x, $y + 7.4);
+    $pdf->Cell($CW, 2.6, 'SMAN 1 BANGUNREJO', 0, 0, 'C');
 
     // ---- Band judul ----
     $pdf->SetFillColor($cBg[0], $cBg[1], $cBg[2]);
     $pdf->Rect($x, $y + $kopH, $CW, $titleH, 'F');
-    dashed_line($pdf, $x, $y + $kopH + $titleH, $x + $CW, 0.3, 0.2);
+    // (dashed line di bawah band judul dihapus sesuai request)
     $pdf->SetTextColor($cBlueDark[0], $cBlueDark[1], $cBlueDark[2]);
-    $pdf->SetFont('Helvetica', 'B', 6);
-    $pdf->SetXY($x, $y + $kopH + 1.35);
-    $pdf->Cell($CW, 2.0, 'KARTU PELAJAR', 0, 0, 'C');
+    $pdf->SetFont('Helvetica', 'B', 7.5);
+    $pdf->SetXY($x, $y + $kopH + 1.7);
+    $pdf->Cell($CW, 2.4, 'KARTU PELAJAR', 0, 0, 'C');
+
+    // Aksen tanda "-" di sisi kiri & kanan judul (meniru tampilan web: gradasi transparan -> biru)
+    $barW = 6.88;   // 26px
+    $barH = 0.4;    // 1.5px
+    $barGap = 2.12; // 8px
+    $cBlueAcc = array(59, 130, 246); // #3b82f6
+    $cxBar = $x + $CW / 2;
+    $halfT = $pdf->GetStringWidth('KARTU PELAJAR') / 2 + 0.5;
+    $segs = array(0.35, 0.7, 1.0); // gradasi 3 segmen (transparan -> biru)
+    $segW = $barW / count($segs);
+    $yBar = $y + $kopH + 2.9 - $barH / 2;
+    foreach (array(-1, 1) as $side) {
+        foreach ($segs as $i => $f) {
+            $pdf->SetFillColor(
+                $cBg[0] + ($cBlueAcc[0] - $cBg[0]) * $f,
+                $cBg[1] + ($cBlueAcc[1] - $cBg[1]) * $f,
+                $cBg[2] + ($cBlueAcc[2] - $cBg[2]) * $f
+            );
+            $bx = ($side < 0)
+                ? ($cxBar - $halfT - $barGap - $barW + $i * $segW)
+                : ($cxBar + $halfT + $barGap + $i * $segW);
+            $pdf->Rect($bx, $yBar, $segW + 0.01, $barH, 'F');
+        }
+    }
 
     // ---- Watermark logo di tengah kartu ----
     if ($logo_sman1_wm) {
@@ -329,7 +410,9 @@ foreach ($students as $idx => $s) {
     $lblX = $infoX + 1.07 + $iconSize;
     $colonX = $lblX + 10.35;           // kolom label
     $valX = $colonX + 1.07;
-    $valMaxRow = $x + $CW - $pad - $qr_size - $pad - $valX;
+    // Lebar nilai dibatasi berhenti sebelum zona tanda tangan (ttd mulai x+61.37),
+    // supaya alamat panjang wrap ke bawah, bukan menimpa tanda tangan.
+    $valMaxRow = ($x + 60.2) - $valX;
 
     $rowY = $nameY + 4.68;
     foreach ($rows as $r) {
@@ -345,14 +428,19 @@ foreach ($students as $idx => $s) {
         $pdf->SetXY($colonX, $rowY);
         $pdf->Cell(1.07, 2.0, ':');
         // Nilai
-        $pdf->SetTextColor($cBody[0], $cBody[1], $cBody[2]);
+        $pdf->SetTextColor(0, 0, 0);
         $pdf->SetFont('Helvetica', '', 6);
         if ($r[0] === 'alamat') {
             $pdf->SetXY($valX, $rowY);
             $pdf->MultiCell($valMaxRow, 2.0, $r[2]);
         } else {
             $pdf->SetXY($valX, $rowY);
-            $pdf->Cell($valMaxRow, 2.0, $r[2]);
+            // Clip di lebar kolom (… bila kepanjangan), tidak menimpa QR/ttd
+            $valClip = mb_substr($r[2], 0, 37);
+            if (mb_strlen($r[2]) > 37) {
+                $valClip = rtrim(mb_substr($r[2], 0, 34)) . chr(133);
+            }
+            $pdf->Cell($valMaxRow, 2.0, $valClip);
         }
         $rowY += 2.89;
     }
@@ -373,36 +461,41 @@ foreach ($students as $idx => $s) {
     $pdf->SetDrawColor($cPhotoBorder[0], $cPhotoBorder[1], $cPhotoBorder[2]);
     $pdf->Rect($qrx, $qry, $qr_size, $qr_size);
     $pdf->SetTextColor($cGray[0], $cGray[1], $cGray[2]);
-    $pdf->SetFont('Helvetica', 'B', 4.5);
-    $pdf->SetXY($qrx, $qry + $qr_size + 0.71);
-    $pdf->Cell($qr_size, 1.5, 'QR ABSEN', 0, 0, 'C');
 
     // ---- Tanda tangan Kepala Sekolah (kanan bawah, di bawah QR) ----
     // Gambar sudah memuat cap + tanda tangan + nama + NIP (semua di dalam gambar).
-    $ttdRight = $x + $CW - $pad;          // tepi kanan rata
-    $ttdH = 12.0;                          // tinggi gambar (mm)
-    // Rasio dibaca dinamik dari file aset (fallback 679x350 bila getimagesize gagal)
+    $ttdRight = $x + $CW - 1.0;           // margin kanan 1mm dari tepi kartu (gambar sudah di-crop flush kanan)
+    $ttdH = 15.0;                          // tinggi gambar (mm)
+    // Rasio dibaca dinamik dari file aset (fallback 626x356 bila getimagesize gagal)
     $ttd_size = @getimagesize(KEPSEK_TTD);
-    $ttd_ratio = 679 / 350;
+    $ttd_ratio = 550 / 356;
     if (is_array($ttd_size) && !empty($ttd_size) && !empty($ttd_size[1])) {
         $ttd_ratio = $ttd_size[0] / $ttd_size[1];
     }
     $ttdW = $ttdH * $ttd_ratio;
-    $ttdY = $y + 37.5;                     // mulai di bawah caption QR (37.14), muat antes footer (49.86)
+    $ttdY = $y + 36.5;                     // mulai di bawah QR (34.93); NIP duduk ~1.6mm di band footer
     // Gambar tanda tangan (PNG transparan — FPDF mendukung alpha)
     if (file_exists(KEPSEK_TTD)) {
         $pdf->Image(KEPSEK_TTD, $ttdRight - $ttdW, $ttdY, $ttdW, $ttdH);
     }
 
-    // ---- Footer (teks di paling bawah, dengan garis dashed di atas) ----
+    // ---- Footer (digambar DULU, karena gambar ttd boleh menimpa band footer;
+// background ttd sudah transparan) ----
     $fTop = $y + $CH - $footerH;
-    $pdf->SetFillColor($cBg[0], $cBg[1], $cBg[2]);
+    $pdf->SetFillColor($cFooter[0], $cFooter[1], $cFooter[2]);
     $pdf->Rect($x, $fTop, $CW, $footerH, 'F');
-    dashed_line($pdf, $x, $fTop + 0.4, $x + $CW, 0.3, 0.2);
     $pdf->SetTextColor($cGray[0], $cGray[1], $cGray[2]);
     $pdf->SetFont('Helvetica', 'B', 4.5);
     $pdf->SetXY($x, $fTop + 2.15);
     $pdf->Cell($CW, 1.7, 'KARTU INI WAJIB DIBAWA SETIAP HARI', 0, 0, 'C');
+    // garis dashed pas di atas teks footer (teks cell top = fTop+2.15; masih di bawah NIP)
+    // (garis patah-patah footer dihapus sesuai request)
+
+    // ---- Bingkai kartu digambar TERAKHIR: hitam 0.3mm, sama persis dengan preview HTML (1.13px) ----
+    // Setelah semua isi, agar tidak tertimpa rect gradasi kop / band judul / footer (penyebab garis putus)
+    $pdf->SetLineWidth(0.3);
+    $pdf->SetDrawColor(0, 0, 0);
+    $pdf->Rect($x, $y, $CW, $CH);
 
     // Bersihkan file sementara foto/QR
     if (!empty($foto_jpeg)) @unlink($foto_jpeg);

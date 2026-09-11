@@ -57,19 +57,19 @@ if (!empty($filter_class)) {
         .cards-grid { max-width: 1000px; margin: 20px auto 40px; padding: 0 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
         
         /* Kartu Pelajar (ukuran sama dengan KTP: 85.60 x 53.98 mm) */
-        .id-card { position: relative; background: white; border: 1.5px solid #1e293b; border-radius: 12px; overflow: hidden; box-shadow: 0 8px 20px rgba(0,0,0,0.12); page-break-inside: avoid; display: flex; flex-direction: column; width: 85.6mm; height: 53.98mm; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        .id-card { position: relative; background: white; border: 1.13px solid #000; overflow: hidden; box-shadow: 0 8px 20px rgba(0,0,0,0.12); page-break-inside: avoid; display: flex; flex-direction: column; width: 85.6mm; height: 53.98mm; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         /* Watermark logo di tengah kartu */
         .id-card .watermark { position: absolute; top: 60%; left: 50%; transform: translate(-50%, -50%); width: 108px; height: 108px; object-fit: contain; opacity: 0.1; pointer-events: none; z-index: 0; }
         .id-card .card-kop, .id-card .card-title-band, .id-card .card-body, .id-card .card-footer { position: relative; z-index: 1; }
         /* Kop Surat: gradasi biru, logo kiri & kanan, teks di tengah */
         .id-card .card-kop { background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 60%, #3b82f6 100%); padding: 7px 10px 6px; display: flex; align-items: center; justify-content: space-between; gap: 6px; border-bottom: 2px solid #93c5fd; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-        .id-card .card-kop img.kop-logo { width: 34px; height: 34px; object-fit: contain; flex-shrink: 0; background: white; border-radius: 10px; padding: 2px; }
+        .id-card .card-kop img.kop-logo { width: 34px; height: 34px; object-fit: contain; flex-shrink: 0; }
         .id-card .card-kop .kop-text { text-align: center; min-width: 0; }
-        .id-card .card-kop .kop-text .kop-line1 { font-size: 9px; font-weight: 800; color: white; letter-spacing: 0.5px; text-transform: uppercase; white-space: nowrap; }
-        .id-card .card-kop .kop-text .kop-line2 { font-size: 8px; font-weight: 600; color: #bfdbfe; letter-spacing: 0.5px; margin-top: 1px; text-transform: uppercase; white-space: nowrap; }
-        .id-card .card-kop .kop-text .kop-line3 { font-size: 9px; font-weight: 800; color: #fbbf24; letter-spacing: 1px; margin-top: 1px; text-transform: uppercase; white-space: nowrap; }
+        .id-card .card-kop .kop-text .kop-line1 { font-size: 11.5px; font-weight: 800; color: white; letter-spacing: 0.5px; text-transform: uppercase; white-space: nowrap; }
+        .id-card .card-kop .kop-text .kop-line2 { font-size: 10px; font-weight: 600; color: #bfdbfe; letter-spacing: 0.5px; margin-top: 1px; text-transform: uppercase; white-space: nowrap; }
+        .id-card .card-kop .kop-text .kop-line3 { font-size: 11.5px; font-weight: 800; color: #fbbf24; letter-spacing: 1px; margin-top: 1px; text-transform: uppercase; white-space: nowrap; }
         /* Judul band modern dengan garis samping */
-        .id-card .card-title-band { padding: 3px 10px; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 8px; font-weight: 800; letter-spacing: 2px; color: #1e3a8a; text-transform: uppercase; border-bottom: 1px dashed #cbd5e1; background: #f8fafc; }
+        .id-card .card-title-band { padding: 4px 10px 5px; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 10px; font-weight: 800; letter-spacing: 2px; color: #1e3a8a; text-transform: uppercase; background: #f1f1f1; }
         .id-card .card-title-band::before, .id-card .card-title-band::after { content: ''; height: 1.5px; width: 26px; background: linear-gradient(90deg, transparent, #3b82f6); border-radius: 2px; }
         .id-card .card-title-band::after { background: linear-gradient(90deg, #3b82f6, transparent); }
         .id-card .card-body { padding: 9px 10px; display: flex; gap: 8px; align-items: flex-start; }
@@ -81,14 +81,18 @@ if (!empty($filter_class)) {
         .id-card .card-info .detail i { color: #3b82f6; width: 10px; text-align: center; flex-shrink: 0; margin-top: 1px; }
         .id-card .card-info .detail .lbl { display: inline-flex; align-items: baseline; justify-content: space-between; width: 38px; color: #0f172a; font-weight: 700; flex-shrink: 0; }
         .id-card .card-info .detail .lbl .colon { flex-shrink: 0; }
-        .id-card .card-info .detail .val { color: #475569; font-weight: 600; min-width: 0; word-break: break-word; }
+        .id-card .card-info .detail .val { color: #000; font-weight: 600; min-width: 0; word-break: break-word; }
+        /* ALAMAT: nilai wrap di kolom sendiri (hanging indent), berhenti sebelum zona tanda tangan */
+        .id-card .card-info .detail.detail-wrap { display: block; position: relative; padding-left: 56px; max-width: calc(56px + 28.6mm); }
+        .id-card .card-info .detail.detail-wrap i { position: absolute; left: 0; top: 1px; }
+        .id-card .card-info .detail.detail-wrap .lbl { position: absolute; left: 14px; top: 0; }
+        .id-card .card-info .detail.detail-wrap .val { display: inline; }
         .id-card .card-qr { display: flex; flex-direction: column; align-items: center; gap: 2px; flex-shrink: 0; }
-        .id-card .card-qr img { width: 50px; height: 50px; border: 1px solid #e2e8f0; border-radius: 6px; padding: 2px; background: white; }
-        .id-card .card-qr span { font-size: 6px; font-weight: 700; color: #94a3b8; letter-spacing: 1px; text-transform: uppercase; }
-        .id-card .card-footer { margin-top: auto; background: #f8fafc; border-top: 1px dashed #cbd5e1; padding: 3px 10px; font-size: 6px; font-weight: 700; color: #94a3b8; letter-spacing: 1px; text-align: center; text-transform: uppercase; }
+        .id-card .card-qr img { width: 57px; height: 57px; border: 1px solid #e2e8f0; border-radius: 6px; padding: 2px; background: white; }
+        .id-card .card-footer { margin-top: auto; background: #f8fafc; padding: 3px 10px; font-size: 6px; font-weight: 700; color: #94a3b8; letter-spacing: 1px; text-align: center; text-transform: uppercase; position: relative; }
         /* Blok tanda tangan Kepala Sekolah (kanan bawah) — gambar memuat cap + nama + NIP */
-        .id-card .card-ttd { position: absolute; right: 8px; bottom: 4.6mm; text-align: right; z-index: 2; line-height: 1.25; }
-        .id-card .card-ttd img { height: 12mm; width: auto; display: inline-block; margin: 0.2mm 0; }
+        .id-card .card-ttd { position: absolute; right: 1mm; bottom: 2mm; text-align: right; z-index: 2; line-height: 1.25; }
+        .id-card .card-ttd img { height: 15mm; width: auto; display: inline-block; margin: 0.2mm 0; }
         
         .empty-state { max-width: 1000px; margin: 40px auto; padding: 40px 20px; text-align: center; background: white; border-radius: 16px; }
         .empty-state i { font-size: 40px; color: #cbd5e1; margin-bottom: 12px; display: block; }
@@ -105,7 +109,7 @@ if (!empty($filter_class)) {
             body { background: white; }
             .toolbar, .info-bar { display: none !important; }
             .cards-grid { max-width: 100%; margin: 0; padding: 0; gap: 8px; }
-            .id-card { box-shadow: none; border: 1px solid #000; border-radius: 8px; }
+            .id-card { box-shadow: none; border: 1.13px solid #000; border-radius: 0; }
         }
     </style>
 </head>
@@ -180,16 +184,15 @@ if (!empty($filter_class)) {
                             <div class="detail"><i class="fa-solid fa-hashtag"></i> <span class="lbl">NISN<span class="colon">:</span></span><span class="val"><?= htmlspecialchars(!empty($s['nisn']) ? $s['nisn'] : '-') ?></span></div>
                             <div class="detail"><i class="fa-solid fa-cake-candles"></i> <span class="lbl">TTL<span class="colon">:</span></span><span class="val"><?= htmlspecialchars($ttl) ?></span></div>
                             <div class="detail"><i class="fa-solid fa-venus-mars"></i> <span class="lbl">JK<span class="colon">:</span></span><span class="val"><?= $jk ?></span></div>
-                            <div class="detail"><i class="fa-solid fa-location-dot"></i> <span class="lbl">ALAMAT<span class="colon">:</span></span><span class="val"><?= htmlspecialchars(!empty($s['alamat']) ? $s['alamat'] : '-') ?></span></div>
+                            <div class="detail detail-wrap"><i class="fa-solid fa-location-dot"></i> <span class="lbl">ALAMAT<span class="colon">:</span></span><span class="val"><?= htmlspecialchars(!empty($s['alamat']) ? $s['alamat'] : '-') ?></span></div>
                         </div>
                         <div class="card-qr">
                             <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=<?= urlencode($s['nisn']) ?>" alt="QR">
-                            <span>QR Absen</span>
                         </div>
                     </div>
                     <div class="card-footer">Kartu ini wajib dibawa setiap hari</div>
                     <div class="card-ttd">
-                        <img src="../assets/ttd_kepsek.png?v=4" alt="Tanda tangan Kepala Sekolah">
+                        <img src="../assets/ttd_kepsek.png?v=7" alt="Tanda tangan Kepala Sekolah">
                     </div>
                     <img class="watermark" src="../assets/logo_sman1.png" alt="">
                 </div>
