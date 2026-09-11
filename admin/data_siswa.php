@@ -111,6 +111,66 @@ if(isset($_GET['action']) && $_GET['action'] === 'delete' && isset($_GET['id']))
     }
 }
 
+// Proses Hapus Siswa Per Kelas (semua siswa dalam satu kelas + akun + riwayat absensi)
+if(isset($_GET['action']) && $_GET['action'] === 'delete_class' && isset($_GET['class'])) {
+    $class_hapus = trim($_GET['class']);
+    try {
+        // Dapatkan semua siswa di kelas tersebut (user_id + foto)
+        $stmt_class = $pdo->prepare("SELECT id, user_id, name, foto FROM students WHERE class = ?");
+        $stmt_class->execute([$class_hapus]);
+        $siswa_kelas = $stmt_class->fetchAll();
+
+        if(!empty($siswa_kelas)) {
+            $pdo->beginTransaction();
+            // Hapus file foto setiap siswa
+            foreach($siswa_kelas as $s) {
+                if(!empty($s['foto'])) @unlink('../' . $s['foto']);
+            }
+            // Hapus akun user (karena FK ON DELETE CASCADE menghapus student & attendance otomatis)
+            $user_ids = array_filter(array_column($siswa_kelas, 'user_id'));
+            if(!empty($user_ids)) {
+                $in = implode(',', array_fill(0, count($user_ids), '?'));
+                $pdo->prepare("DELETE FROM users WHERE id IN ($in)")->execute(array_values($user_ids));
+            }
+            $pdo->commit();
+            $success = "Seluruh <strong>" . count($siswa_kelas) . " siswa</strong> di kelas <strong>" . htmlspecialchars($class_hapus) . "</strong> beserta akun dan riwayat absensinya berhasil dihapus permanen.";
+        } else {
+            $error = "Tidak ada siswa di kelas <strong>" . htmlspecialchars($class_hapus) . "</strong>";
+        }
+    } catch (PDOException $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        $error = "Gagal menghapus per kelas: " . $e->getMessage();
+    }
+}
+
+// Proses Hapus SEMUA Siswa (seluruh siswa + akun + riwayat absensi + foto)
+// Harus lewat POST dengan kata konfirmasi "HAPUS" — aksi sangat destruktif.
+if(isset($_POST['action']) && $_POST['action'] === 'delete_all_students') {
+    $konfirmasi = trim(isset($_POST['konfirmasi']) ? $_POST['konfirmasi'] : '');
+    if ($konfirmasi !== 'HAPUS') {
+        $error = "Konfirmasi salah. Ketik <strong>HAPUS</strong> (huruf besar) untuk melanjutkan.";
+    } else {
+        try {
+            // Ambil semua foto siswa untuk dibersihkan dari disk
+            $foto_files = $pdo->query("SELECT foto FROM students WHERE foto IS NOT NULL AND foto <> ''")->fetchAll(PDO::FETCH_COLUMN);
+            $total_siswa = $pdo->query("SELECT COUNT(*) FROM students")->fetchColumn();
+
+            $pdo->beginTransaction();
+            foreach ($foto_files as $f) {
+                @unlink('../' . $f);
+            }
+            // Hapus semua akun student (FK ON DELETE CASCADE membersihkan students & attendance)
+            $pdo->exec("DELETE FROM users WHERE role = 'student'");
+            $pdo->commit();
+
+            $success = "Seluruh <strong>" . $total_siswa . " siswa</strong> beserta akun, riwayat absensi, dan foto berhasil dihapus permanen. Akun admin &amp; guru tetap tersimpan.";
+        } catch (PDOException $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            $error = "Gagal menghapus semua siswa: " . $e->getMessage();
+        }
+    }
+}
+
 // Filter Pencarian Siswa (NISN / Nama / NIS) & Filter Kelas
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $filter_class = isset($_GET['filter_class']) ? trim($_GET['filter_class']) : '';
@@ -153,6 +213,13 @@ $students = $stmt->fetchAll();
 
 // Ambil daftar kelas dari database
 $classes = $pdo->query("SELECT name FROM kelas ORDER BY name ASC")->fetchAll(PDO::FETCH_COLUMN);
+
+// Ambil jumlah siswa per kelas (untuk halaman hapus per kelas)
+$class_counts = [];
+foreach ($pdo->query("SELECT class, COUNT(*) AS c FROM students GROUP BY class") as $row) {
+    $class_counts[$row['class']] = (int)$row['c'];
+}
+$total_capacity = $pdo->query("SELECT COUNT(*) FROM students")->fetchColumn();
 ?>
 <!DOCTYPE html>
 <html lang="id">
@@ -221,6 +288,8 @@ $classes = $pdo->query("SELECT name FROM kelas ORDER BY name ASC")->fetchAll(PDO
         .panel-header h3 { font-size: 18px; font-weight: 700; color: var(--dark); }
         .btn-add { display: inline-flex; align-items: center; gap: 8px; padding: 10px 18px; background: var(--primary); color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px; transition: background 0.2s; }
         .btn-add:hover { background: var(--primary-hover); }
+        .btn-add-danger { display: inline-flex; align-items: center; gap: 8px; padding: 10px 18px; background: var(--danger); color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px; transition: background 0.2s; border: none; cursor: pointer; }
+        .btn-add-danger:hover { background: #dc2626; }
 
         /* Form Pencarian */
         .search-form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -262,7 +331,7 @@ $classes = $pdo->query("SELECT name FROM kelas ORDER BY name ASC")->fetchAll(PDO
         
         .close-modal { position: absolute; top: 15px; right: 20px; font-size: 24px; cursor: pointer; color: var(--gray); font-weight: bold; transition: color 0.2s; }
         .close-modal:hover { color: var(--dark); }
-        .modal-content img { width: 220px; height: 220px;x; margin: 25px 0; border: 2px solid var(--border); padding: 10px; border-radius: 12px; background: white; }
+        .modal-content img { width: 220px; height: 220px; margin: 25px 0; border: 2px solid var(--border); padding: 10px; border-radius: 12px; background: white; }
         .btn-print-qr { width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 14px; background: var(--success); color: white; border: none; border-radius: 10px; font-weight: 700; cursor: pointer; font-size: 15px; transition: background 0.2s; }
         .btn-print-qr:hover { background: #059669; }
         
@@ -353,13 +422,13 @@ $classes = $pdo->query("SELECT name FROM kelas ORDER BY name ASC")->fetchAll(PDO
                     <li><a href="scan?type=pulang"><i class="fa-solid fa-right-from-bracket"></i> <span>Absen Pulang</span></a></li>
                     <li><a href="scan?type=sholat"><i class="fa-solid fa-mosque"></i> <span>Absen Sholat</span></a></li>
                     <li><a href="waktu_absensi"><i class="fa-solid fa-clock"></i> <span>Waktu Absensi</span></a></li>
+                    <li><a href="hapus_data"><i class="fa-solid fa-broom"></i> <span>Bersihkan Data</span></a></li>
                 </ul>
             </li>
             <li><a href="data_siswa" class="active"><i class="fa-solid fa-users"></i> <span>Data Siswa</span></a></li>
             <li><a href="kelas"><i class="fa-solid fa-school"></i> <span>Kelas</span></a></li>
             <li><a href="cetak_kartu"><i class="fa-solid fa-id-card"></i> <span>Cetak Kartu Pelajar</span></a></li>
             <li><a href="tambah_guru"><i class="fa-solid fa-user-plus"></i> <span>Tambah Guru</span></a></li>
-            <li><a href="scan"><i class="fa-solid fa-camera"></i> <span>Scan QR Code</span></a></li>
             <li><a href="input_absen"><i class="fa-solid fa-clipboard-user"></i> <span>Input Manual</span></a></li>
             <li><a href="laporan"><i class="fa-solid fa-file-lines"></i> <span>Laporan Absensi</span></a></li>
         </ul>
@@ -411,6 +480,8 @@ $classes = $pdo->query("SELECT name FROM kelas ORDER BY name ASC")->fetchAll(PDO
                         <?php endif; ?>
                     </form>
                     <button onclick="openCetakQR()" class="btn-add" style="background: var(--success); border: none; cursor: pointer;"><i class="fa-solid fa-print"></i> Cetak QR</button>
+                    <button onclick="openHapusKelas()" class="btn-add-danger"><i class="fa-solid fa-trash-can"></i> Hapus Per Kelas</button>
+                    <button onclick="openHapusSemua()" class="btn-add-danger" style="background: var(--dark);"><i class="fa-solid fa-users-slash"></i> Hapus Semua Siswa</button>
                     <a href="tambah_siswa" class="btn-add"><i class="fa-solid fa-plus"></i> Tambah Siswa Baru</a>
                 </div>
             </div>
@@ -440,7 +511,7 @@ $classes = $pdo->query("SELECT name FROM kelas ORDER BY name ASC")->fetchAll(PDO
                                     <td><strong><?= htmlspecialchars($student['name']) ?></strong></td>
                                     <td><?= htmlspecialchars($student['class']) ?></td>
                                     <td>
-                                        <button class="btn-action qr" onclick="showQR('<?= $student['qr_token'] ?>', '<?= htmlspecialchars(addslashes($student['name'])) ?>', '<?= htmlspecialchars(!empty($student['nisn']) ? $student['nisn'] : '-') ?>')">
+                                        <button class="btn-action qr" onclick="showQR('<?= htmlspecialchars(!empty($student['nisn']) ? $student['nisn'] : $student['qr_token']) ?>', '<?= htmlspecialchars(addslashes($student['name'])) ?>', '<?= htmlspecialchars(!empty($student['nisn']) ? $student['nisn'] : '-') ?>')">
                                             <i class="fa-solid fa-magnifying-glass"></i> Lihat QR
                                         </button>
                                         <a href="data_siswa?action=edit&id=<?= $student['id'] ?>" class="btn-action edit">
@@ -459,7 +530,7 @@ $classes = $pdo->query("SELECT name FROM kelas ORDER BY name ASC")->fetchAll(PDO
 
             <?php if($total > 0): ?>
                 <div class="pagination-info">
-                    Menampilkan <?= $offset + 1 ?>â€“<?= min($offset + $per_page, $total) ?> dari <?= $total ?> siswa
+                    Menampilkan <?= $offset + 1 ?>–<?= min($offset + $per_page, $total) ?> dari <?= $total ?> siswa
                 </div>
                 <div class="pagination">
                     <?php if ($page > 1): ?>
@@ -496,6 +567,58 @@ $classes = $pdo->query("SELECT name FROM kelas ORDER BY name ASC")->fetchAll(PDO
                     <i class="fa-solid fa-print"></i> Cetak QR Kelas
                 </button>
                 <button type="button" class="btn-cancel" onclick="closeCetakQR()"><i class="fa-solid fa-xmark"></i> Batal</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal Hapus Siswa Per Kelas -->
+    <div id="hapusKelasModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal" onclick="closeHapusKelas()"><i class="fa-solid fa-xmark"></i></span>
+            <h3 class="modal-title"><i class="fa-solid fa-trash-can" style="color: var(--danger); margin-right: 8px;"></i> Hapus Siswa Per Kelas</h3>
+            <p style="color: var(--gray); font-size: 14px; font-weight: 600; margin-top: 6px;">Pilih kelas, seluruh siswa di dalamnya akan dihapus permanen beserta akun &amp; riwayat absensinya.</p>
+            <div class="edit-form">
+                <div class="form-group">
+                    <label for="hapus_class">Pilih Kelas</label>
+                    <select id="hapus_class" onchange="updateHapusKelasInfo()">
+                        <option value="">-- Pilih Kelas --</option>
+                        <?php foreach($classes as $c): ?>
+                            <option value="<?= htmlspecialchars($c) ?>"><?= htmlspecialchars($c) ?> (<?= isset($class_counts[$c]) ? $class_counts[$c] : 0 ?> siswa)</option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div id="hapusKelasInfo" style="font-size: 13px; color: var(--gray); background: var(--warning-light); padding: 12px; border-radius: 10px; margin-bottom: 18px; line-height: 1.6;">
+                    <i class="fa-solid fa-circle-info" style="color: var(--warning); margin-right: 6px;"></i>
+                    <span>Pilih kelas terlebih dahulu untuk melihat jumlah siswa yang akan dihapus.</span>
+                </div>
+                <button id="btnHapusKelasConfirm" type="button" class="btn-save-edit" style="background: var(--danger);" onclick="confirmHapusKelas()" disabled>
+                    <i class="fa-solid fa-trash-can"></i> Hapus Semua Siswa Kelas Ini
+                </button>
+                <button type="button" class="btn-cancel" onclick="closeHapusKelas()"><i class="fa-solid fa-xmark"></i> Batal</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Hapus SEMUA Siswa -->
+    <div id="hapusSemuaModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal" onclick="closeHapusSemua()"><i class="fa-solid fa-xmark"></i></span>
+            <h3 class="modal-title"><i class="fa-solid fa-users-slash" style="color: var(--danger); margin-right: 8px;"></i> Hapus Semua Siswa</h3>
+            <p style="color: var(--gray); font-size: 14px; font-weight: 600; margin-top: 6px;">Seluruh siswa beserta akun login, riwayat absensi, dan foto akan dihapus <b>permanen</b>. Akun admin &amp; guru tetap aman.</p>
+            <div style="background: var(--danger-light); color: #991b1b; font-size: 13px; padding: 12px; border-radius: 10px; margin: 14px 0; line-height: 1.6;">
+                <i class="fa-solid fa-triangle-exclamation"></i>
+                Tindakan ini tidak dapat dibatalkan. Disarankan <b>export laporan / backup</b> terlebih dahulu.
+            </div>
+            <form method="POST" action="data_siswa" class="edit-form" style="margin-top: 0;">
+                <div class="form-group">
+                    <label for="konfirmasi_hapus">Ketik <b style="color: var(--danger);">HAPUS</b> untuk mengaktifkan tombol</label>
+                    <input type="text" id="konfirmasi_hapus" name="konfirmasi" placeholder="HAPUS" autocomplete="off" oninput="cekKonfirmasiHapus()">
+                </div>
+                <button type="submit" class="btn-save-edit" style="background: var(--danger);" id="btnHapusSemuaConfirm" disabled>
+                    <i class="fa-solid fa-trash-can"></i> Hapus Semua Siswa Sekarang
+                </button>
+                <button type="button" class="btn-cancel" onclick="closeHapusSemua()"><i class="fa-solid fa-xmark"></i> Batal</button>
+                <input type="hidden" name="action" value="delete_all_students">
             </form>
         </div>
     </div>
@@ -626,6 +749,64 @@ $classes = $pdo->query("SELECT name FROM kelas ORDER BY name ASC")->fetchAll(PDO
             document.getElementById('cetakModal').classList.remove('active');
         }
 
+        // Interaksi Modal Hapus Per Kelas
+        const hapusKelasModal = document.getElementById('hapusKelasModal');
+        const hapusClassSelect = document.getElementById('hapus_class');
+        const hapusKelasInfo = document.getElementById('hapusKelasInfo');
+        const btnHapusKelasConfirm = document.getElementById('btnHapusKelasConfirm');
+        const totalCapacity = <?= (int)$total_capacity ?>;
+
+        function openHapusKelas() {
+            hapusClassSelect.value = '';
+            updateHapusKelasInfo();
+            hapusKelasModal.classList.add('active');
+        }
+
+        function closeHapusKelas() {
+            hapusKelasModal.classList.remove('active');
+        }
+
+        function updateHapusKelasInfo() {
+            const kelas = hapusClassSelect.value;
+            if (!kelas) {
+                hapusKelasInfo.innerHTML = '<i class="fa-solid fa-circle-info" style="color: var(--warning); margin-right: 6px;"></i> Pilih kelas terlebih dahulu untuk melihat jumlah siswa yang akan dihapus.';
+                btnHapusKelasConfirm.disabled = true;
+                return;
+            }
+            const opt = hapusClassSelect.options[hapusClassSelect.selectedIndex];
+            const n = parseInt((opt.textContent.match(/\((\d+)\s*s\w*\)/i) || [])[1] || '0', 10);
+            if (n === 0) {
+                hapusKelasInfo.innerHTML = '<i class="fa-solid fa-circle-exclamation" style="color: var(--danger); margin-right: 6px;"></i> Kelas <b>' + kelas + '</b> tidak memiliki siswa, tidak ada yang dihapus.';
+                btnHapusKelasConfirm.disabled = true;
+            } else {
+                hapusKelasInfo.innerHTML = '<i class="fa-solid fa-triangle-exclamation" style="color: var(--danger); margin-right: 6px;"></i> Setelah dikonfirmasi, <b>' + n + ' siswa</b> di kelas <b>' + kelas + '</b> beserta akun &amp; riwayat absensinya akan dihapus <b>permanen</b> (tidak dapat dibatalkan).';
+                btnHapusKelasConfirm.disabled = false;
+            }
+        }
+
+        function confirmHapusKelas() {
+            const kelas = hapusClassSelect.value;
+            if (!kelas) return;
+            if (!confirm('Yakin ingin menghapus SEMUA siswa di kelas "' + kelas + '" beserta akun dan seluruh riwayat absensinya? Tindakan ini PERMANEN.')) return;
+            window.location.href = 'data_siswa?action=delete_class&class=' + encodeURIComponent(kelas) + '&search=' + encodeURIComponent('<?= $search ?>') + '&filter_class=' + encodeURIComponent('<?= $filter_class ?>');
+        }
+
+        // ===== Modal Hapus SEMUA Siswa =====
+        function openHapusSemua() {
+            document.getElementById('konfirmasi_hapus').value = '';
+            cekKonfirmasiHapus();
+            document.getElementById('hapusSemuaModal').classList.add('active');
+        }
+
+        function closeHapusSemua() {
+            document.getElementById('hapusSemuaModal').classList.remove('active');
+        }
+
+        function cekKonfirmasiHapus() {
+            const ok = document.getElementById('konfirmasi_hapus').value.trim() === 'HAPUS';
+            document.getElementById('btnHapusSemuaConfirm').disabled = !ok;
+        }
+
         function printQR() {
             const win = window.open('', '_blank');
             win.document.write(`
@@ -638,11 +819,7 @@ $classes = $pdo->query("SELECT name FROM kelas ORDER BY name ASC")->fetchAll(PDO
                         .card { border: 2px solid #1e293b; padding: 30px; display: inline-block; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
                         h2 { margin: 0 0 5px 0; color: #0f172a; font-size: 22px; text-transform: uppercase; letter-spacing: 1px; }
                         p { margin: 0 0 20px 0; color: #475569; font-weight: 600; font-size: 16px; }
-                        img { width: 220px; height: 220px;
-
-
-
-x; border: 1px solid #e2e8f0; padding: 10px; border-radius: 12px; }
+                        img { width: 220px; height: 220px; border: 1px solid #e2e8f0; padding: 10px; border-radius: 12px; }
                         .footer { margin-top: 20px; font-size: 12px; color: #94a3b8; font-weight: 600; }
                     </style>
                 </head>

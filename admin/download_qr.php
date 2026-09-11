@@ -41,7 +41,7 @@ if ($zip->open($tmp_zip, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
 
 foreach ($students as $s) {
     $tmp_png = tempnam(sys_get_temp_dir(), 'qr') . '.png';
-    if (!absensi_qr_png($s['qr_token'], $tmp_png, 10, 4)) {
+    if (!absensi_qr_png($s['nisn'], $tmp_png, 10, 4)) {
         @unlink($tmp_png);
         continue;
     }

@@ -73,6 +73,9 @@ class PDF_Kartu extends FPDF
 
 $filter_class = isset($_GET['filter_class']) ? trim($_GET['filter_class']) : '';
 
+// ==================== DATA TANDA TANGAN KEPALA SEKOLAH ====================
+define('KEPSEK_TTD', '../assets/ttd_kepsek.png'); // PNG latar transparant (cap + nama + NIP sudah di dalam gambar)
+
 if (empty($filter_class)) {
     header("Location: cetak_kartu");
     exit;
@@ -287,7 +290,7 @@ foreach ($students as $idx => $s) {
     // ---- Foto / avatar ----
     $foto_path = !empty($s['foto']) ? '../' . $s['foto'] : '';
     $px = $x + $pad;
-    $py = $bodyTop + $pad;
+    $py = $y + $bodyTop + $pad;
     $foto_jpeg = (!empty($foto_path) && file_exists($foto_path)) ? to_jpeg($foto_path, 120, 150) : null;
     if ($foto_jpeg) {
         $pdf->Image($foto_jpeg, $px, $py, $photo_w, $photo_h);
@@ -300,7 +303,7 @@ foreach ($students as $idx => $s) {
 
     // ---- Nama ----
     $infoX = $x + $pad + $photo_w + 2.49;
-    $nameY = $bodyTop + $pad;
+    $nameY = $y + $bodyTop + $pad;
     $valMaxW = $x + $CW - $pad - $qr_size - $pad - $infoX; // sampai sebelum QR (kanan)
     $pdf->SetTextColor($cDark[0], $cDark[1], $cDark[2]);
     $pdf->SetFont('Helvetica', 'B', 8.5);
@@ -356,10 +359,10 @@ foreach ($students as $idx => $s) {
 
     // ---- QR Code (kanan, sejajar foto) ----
     $qrx = $x + $CW - $pad - $qr_size;
-    $qry = $bodyTop + $pad;
+    $qry = $y + $bodyTop + $pad;
     $qr_jpeg = null;
     $qr_tmp = tempnam(sys_get_temp_dir(), 'qr') . '.png';
-    if (absensi_qr_png($s['qr_token'], $qr_tmp, 8, 2)) {
+    if (absensi_qr_png($s['nisn'], $qr_tmp, 8, 2)) {
         $qr_jpeg = to_jpeg($qr_tmp, 200, 200);
         @unlink($qr_tmp);
     }
@@ -374,15 +377,32 @@ foreach ($students as $idx => $s) {
     $pdf->SetXY($qrx, $qry + $qr_size + 0.71);
     $pdf->Cell($qr_size, 1.5, 'QR ABSEN', 0, 0, 'C');
 
-    // ---- Footer ----
+    // ---- Tanda tangan Kepala Sekolah (kanan bawah, di bawah QR) ----
+    // Gambar sudah memuat cap + tanda tangan + nama + NIP (semua di dalam gambar).
+    $ttdRight = $x + $CW - $pad;          // tepi kanan rata
+    $ttdH = 12.0;                          // tinggi gambar (mm)
+    // Rasio dibaca dinamik dari file aset (fallback 679x350 bila getimagesize gagal)
+    $ttd_size = @getimagesize(KEPSEK_TTD);
+    $ttd_ratio = 679 / 350;
+    if (is_array($ttd_size) && !empty($ttd_size) && !empty($ttd_size[1])) {
+        $ttd_ratio = $ttd_size[0] / $ttd_size[1];
+    }
+    $ttdW = $ttdH * $ttd_ratio;
+    $ttdY = $y + 37.5;                     // mulai di bawah caption QR (37.14), muat antes footer (49.86)
+    // Gambar tanda tangan (PNG transparan — FPDF mendukung alpha)
+    if (file_exists(KEPSEK_TTD)) {
+        $pdf->Image(KEPSEK_TTD, $ttdRight - $ttdW, $ttdY, $ttdW, $ttdH);
+    }
+
+    // ---- Footer (teks di paling bawah, dengan garis dashed di atas) ----
     $fTop = $y + $CH - $footerH;
     $pdf->SetFillColor($cBg[0], $cBg[1], $cBg[2]);
     $pdf->Rect($x, $fTop, $CW, $footerH, 'F');
-    dashed_line($pdf, $x, $fTop, $x + $CW, 0.3, 0.2);
+    dashed_line($pdf, $x, $fTop + 0.4, $x + $CW, 0.3, 0.2);
     $pdf->SetTextColor($cGray[0], $cGray[1], $cGray[2]);
     $pdf->SetFont('Helvetica', 'B', 4.5);
-    $pdf->SetXY($x, $fTop + 1.21);
-    $pdf->Cell($CW, 1.75, 'KARTU INI WAJIB DIBAWA SETIAP HARI', 0, 0, 'C');
+    $pdf->SetXY($x, $fTop + 2.15);
+    $pdf->Cell($CW, 1.7, 'KARTU INI WAJIB DIBAWA SETIAP HARI', 0, 0, 'C');
 
     // Bersihkan file sementara foto/QR
     if (!empty($foto_jpeg)) @unlink($foto_jpeg);

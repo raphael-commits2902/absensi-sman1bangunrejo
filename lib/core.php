@@ -146,6 +146,28 @@ if (!function_exists('absensi_is_terlambat')) {
     }
 
     /**
+     * Mengekstrak NISN dari isi QR. Mendukung dua format QR:
+     *  - "NISN" saja  (format universal baru, mis. 3103710480)
+     *  - "token_NISN" (format lama aplikasi, mis. 1c2620cf..._3103710480)
+     * Mengembalikan NISN bila dikenali, atau null.
+     * @param string $raw
+     * @return string|null
+     */
+    function absensi_extract_nisn($raw)
+    {
+        $raw = trim((string)$raw);
+        if ($raw === '') return null;
+        // Format lama: ambil bagian setelah underscore terakhir
+        if (strpos($raw, '_') !== false) {
+            $parts = explode('_', $raw);
+            $candidate = end($parts);
+            return ctype_digit($candidate) ? $candidate : null;
+        }
+        // Format universal: semua digit
+        return ctype_digit($raw) ? $raw : null;
+    }
+
+    /**
      * Autentikasi login. Mengembalikan baris user bila berhasil, null bila gagal.
      * @param PDO    $pdo
      * @param string $username
@@ -179,8 +201,15 @@ if (!function_exists('absensi_is_terlambat')) {
         $today = substr($now, 0, 10);
         $current_time = substr($now, 11, 8);
 
-        $stmt_student = $pdo->prepare("SELECT id, name, nis, nisn, class, foto FROM students WHERE qr_token = ?");
-        $stmt_student->execute([trim($qr_token)]);
+        $nisn_kunci = absensi_extract_nisn($qr_token);
+        if (!empty($nisn_kunci)) {
+            $stmt_student = $pdo->prepare("SELECT id, name, nis, nisn, class, foto FROM students WHERE nisn = ?");
+            $stmt_student->execute([$nisn_kunci]);
+        } else {
+            // Fallback: cocokkan token lama persis di kolom qr_token
+            $stmt_student = $pdo->prepare("SELECT id, name, nis, nisn, class, foto FROM students WHERE qr_token = ?");
+            $stmt_student->execute([trim($qr_token)]);
+        }
         $student = $stmt_student->fetch();
 
         if (!$student) {
@@ -231,8 +260,15 @@ if (!function_exists('absensi_is_terlambat')) {
         $date = substr($now, 0, 10);
         $time = substr($now, 11, 8);
 
-        $stmt = $pdo->prepare("SELECT id, name, nisn, class, foto FROM students WHERE qr_token = ?");
-        $stmt->execute([trim($qr_token)]);
+        $nisn_kunci = absensi_extract_nisn($qr_token);
+        if (!empty($nisn_kunci)) {
+            $stmt = $pdo->prepare("SELECT id, name, nisn, class, foto FROM students WHERE nisn = ?");
+            $stmt->execute([$nisn_kunci]);
+        } else {
+            // Fallback: cocokkan token lama persis di kolom qr_token
+            $stmt = $pdo->prepare("SELECT id, name, nisn, class, foto FROM students WHERE qr_token = ?");
+            $stmt->execute([trim($qr_token)]);
+        }
         $student = $stmt->fetch();
 
         if (!$student) {
@@ -261,6 +297,9 @@ if (!function_exists('absensi_is_terlambat')) {
         if ($type === 'pulang') {
             if (!$row) {
                 return ['status' => 'error', 'message' => $student['name'] . ' belum absen Hadir hari ini.'];
+            }
+            if (empty($row['time_sholat'])) {
+                return ['status' => 'error', 'message' => $student['name'] . ' belum absen Sholat, siswa tidak bisa absen Pulang dahulu.'];
             }
             if (!empty($row['time_out'])) {
                 return ['status' => 'error', 'message' => $student['name'] . ' sudah absen Pulang hari ini.'];

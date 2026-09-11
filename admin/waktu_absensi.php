@@ -214,6 +214,7 @@ $labels = [
                     <li><a href="scan?type=pulang"><i class="fa-solid fa-right-from-bracket"></i> <span>Absen Pulang</span></a></li>
                     <li><a href="scan?type=sholat"><i class="fa-solid fa-mosque"></i> <span>Absen Sholat</span></a></li>
                     <li><a href="waktu_absensi" class="active"><i class="fa-solid fa-clock"></i> <span>Waktu Absensi</span></a></li>
+                    <li><a href="hapus_data"><i class="fa-solid fa-broom"></i> <span>Bersihkan Data</span></a></li>
                 </ul>
             </li>
             <li><a href="data_siswa"><i class="fa-solid fa-users"></i> <span>Data Siswa</span></a></li>

@@ -294,7 +294,7 @@ $alpa_students = absensi_alpa_students($pdo, $filter_date, $filter_class);
         <?php if (!empty($filter_date) && !empty($alpa_students)): ?>
             <div class="data-panel" style="margin-top: 30px;">
                 <h3 style="font-size: 16px; color: var(--dark); margin-bottom: 15px; display: flex; align-items: center; gap: 10px;">
-                    <i class="fa-solid fa-user-xmark" style="color: var(--danger);"></i> Siswa Alpa (Belum Absen) -
+                    <i class="fa-solid fa-user-xmark" style="color: var(--danger);"></i> Siswa Alpa (Belum Absen):
                     <?= date('d M Y', strtotime($filter_date)) ?>
                     <span class="badge alpa" style="margin-left: auto;"><?= count($alpa_students) ?> Siswa</span>
                 </h3>

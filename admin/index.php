@@ -11,9 +11,9 @@ if (!isset($_SESSION['role']) || $_SESSION['role'] !== 'admin') {
 // Ambil Statistik Penting
 $total_siswa = $pdo->query("SELECT COUNT(*) FROM students")->fetchColumn();
 $hari_ini = date('Y-m-d');
-$hadir_hari_ini = $pdo->query("SELECT COUNT(*) FROM attendance WHERE date = '$hari_ini' AND status = 'Hadir'")->fetchColumn();
-$sakit_hari_ini = $pdo->query("SELECT COUNT(*) FROM attendance WHERE date = '$hari_ini' AND status = 'Sakit'")->fetchColumn();
-$izin_hari_ini = $pdo->query("SELECT COUNT(*) FROM attendance WHERE date = '$hari_ini' AND status = 'Izin'")->fetchColumn();
+$hadir_hari_ini = $pdo->query("SELECT COUNT(*) FROM attendance WHERE date = '$hari_ini' AND time_in IS NOT NULL")->fetchColumn();
+$sholat_hari_ini = $pdo->query("SELECT COUNT(*) FROM attendance WHERE date = '$hari_ini' AND time_sholat IS NOT NULL")->fetchColumn();
+$pulang_hari_ini = $pdo->query("SELECT COUNT(*) FROM attendance WHERE date = '$hari_ini' AND time_out IS NOT NULL")->fetchColumn();
 
 // Ambil 5 Absensi Terbaru hari ini
 $stmt_recent = $pdo->query("SELECT a.*, s.name, s.class, s.nisn FROM attendance a JOIN students s ON a.student_id = s.id ORDER BY a.date DESC, a.time DESC LIMIT 5");
@@ -92,6 +92,8 @@ $recent_attendance = $stmt_recent->fetchAll();
         .stat-yellow:hover { border-color: var(--warning-light); }
         .stat-red .card-icon { background: var(--danger-light); color: var(--danger); }
         .stat-red:hover { border-color: var(--danger-light); }
+        .stat-cyan .card-icon { background: #cffafe; color: #0891b2; }
+        .stat-cyan:hover { border-color: #cffafe; }
         
         /* Table Panel */
         .data-panel { background: white; padding: 30px; border-radius: 16px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
@@ -197,13 +199,13 @@ $recent_attendance = $stmt_recent->fetchAll();
                     <li><a href="scan?type=pulang"><i class="fa-solid fa-right-from-bracket"></i> <span>Absen Pulang</span></a></li>
                     <li><a href="scan?type=sholat"><i class="fa-solid fa-mosque"></i> <span>Absen Sholat</span></a></li>
                     <li><a href="waktu_absensi"><i class="fa-solid fa-clock"></i> <span>Waktu Absensi</span></a></li>
+                    <li><a href="hapus_data"><i class="fa-solid fa-broom"></i> <span>Bersihkan Data</span></a></li>
                 </ul>
             </li>
             <li><a href="data_siswa"><i class="fa-solid fa-users"></i> <span>Data Siswa</span></a></li>
             <li><a href="kelas"><i class="fa-solid fa-school"></i> <span>Kelas</span></a></li>
             <li><a href="cetak_kartu"><i class="fa-solid fa-id-card"></i> <span>Cetak Kartu Pelajar</span></a></li>
             <li><a href="tambah_guru"><i class="fa-solid fa-user-plus"></i> <span>Tambah Guru</span></a></li>
-            <li><a href="scan"><i class="fa-solid fa-camera"></i> <span>Scan QR Code</span></a></li>
             <li><a href="laporan"><i class="fa-solid fa-file-lines"></i> <span>Laporan Absensi</span></a></li>
             <li><a href="input_absen"><i class="fa-solid fa-clipboard-user"></i> <span>Input Manual</span></a></li>
         </ul>
@@ -238,19 +240,19 @@ $recent_attendance = $stmt_recent->fetchAll();
                 </div>
                 <div class="card-icon"><i class="fa-solid fa-user-check"></i></div>
             </div>
-            <div class="card-stat stat-yellow">
+            <div class="card-stat stat-blue">
                 <div class="card-info">
-                    <p>Siswa Sakit (Hari Ini)</p>
-                    <h3><?= $sakit_hari_ini ?></h3>
+                    <p>Siswa Sholat (Hari Ini)</p>
+                    <h3><?= $sholat_hari_ini ?></h3>
                 </div>
-                <div class="card-icon"><i class="fa-solid fa-head-side-cough"></i></div>
+                <div class="card-icon"><i class="fa-solid fa-mosque"></i></div>
             </div>
-            <div class="card-stat stat-red">
+            <div class="card-stat stat-cyan">
                 <div class="card-info">
-                    <p>Siswa Izin (Hari Ini)</p>
-                    <h3><?= $izin_hari_ini ?></h3>
+                    <p>Siswa Pulang (Hari Ini)</p>
+                    <h3><?= $pulang_hari_ini ?></h3>
                 </div>
-                <div class="card-icon"><i class="fa-solid fa-envelope-open-text"></i></div>
+                <div class="card-icon"><i class="fa-solid fa-right-from-bracket"></i></div>
             </div>
         </div>
 

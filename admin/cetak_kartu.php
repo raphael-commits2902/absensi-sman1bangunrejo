@@ -57,7 +57,7 @@ if (!empty($filter_class)) {
         .cards-grid { max-width: 1000px; margin: 20px auto 40px; padding: 0 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
         
         /* Kartu Pelajar (ukuran sama dengan KTP: 85.60 x 53.98 mm) */
-        .id-card { position: relative; background: white; border: 1.5px solid #1e293b; border-radius: 12px; overflow: hidden; box-shadow: 0 8px 20px rgba(0,0,0,0.12); page-break-inside: avoid; width: 85.6mm; height: 53.98mm; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        .id-card { position: relative; background: white; border: 1.5px solid #1e293b; border-radius: 12px; overflow: hidden; box-shadow: 0 8px 20px rgba(0,0,0,0.12); page-break-inside: avoid; display: flex; flex-direction: column; width: 85.6mm; height: 53.98mm; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         /* Watermark logo di tengah kartu */
         .id-card .watermark { position: absolute; top: 60%; left: 50%; transform: translate(-50%, -50%); width: 108px; height: 108px; object-fit: contain; opacity: 0.1; pointer-events: none; z-index: 0; }
         .id-card .card-kop, .id-card .card-title-band, .id-card .card-body, .id-card .card-footer { position: relative; z-index: 1; }
@@ -85,7 +85,10 @@ if (!empty($filter_class)) {
         .id-card .card-qr { display: flex; flex-direction: column; align-items: center; gap: 2px; flex-shrink: 0; }
         .id-card .card-qr img { width: 50px; height: 50px; border: 1px solid #e2e8f0; border-radius: 6px; padding: 2px; background: white; }
         .id-card .card-qr span { font-size: 6px; font-weight: 700; color: #94a3b8; letter-spacing: 1px; text-transform: uppercase; }
-        .id-card .card-footer { background: #f8fafc; border-top: 1px dashed #cbd5e1; padding: 3px 10px; font-size: 6px; font-weight: 700; color: #94a3b8; letter-spacing: 1px; text-align: center; text-transform: uppercase; }
+        .id-card .card-footer { margin-top: auto; background: #f8fafc; border-top: 1px dashed #cbd5e1; padding: 3px 10px; font-size: 6px; font-weight: 700; color: #94a3b8; letter-spacing: 1px; text-align: center; text-transform: uppercase; }
+        /* Blok tanda tangan Kepala Sekolah (kanan bawah) — gambar memuat cap + nama + NIP */
+        .id-card .card-ttd { position: absolute; right: 8px; bottom: 4.6mm; text-align: right; z-index: 2; line-height: 1.25; }
+        .id-card .card-ttd img { height: 12mm; width: auto; display: inline-block; margin: 0.2mm 0; }
         
         .empty-state { max-width: 1000px; margin: 40px auto; padding: 40px 20px; text-align: center; background: white; border-radius: 16px; }
         .empty-state i { font-size: 40px; color: #cbd5e1; margin-bottom: 12px; display: block; }
@@ -180,11 +183,14 @@ if (!empty($filter_class)) {
                             <div class="detail"><i class="fa-solid fa-location-dot"></i> <span class="lbl">ALAMAT<span class="colon">:</span></span><span class="val"><?= htmlspecialchars(!empty($s['alamat']) ? $s['alamat'] : '-') ?></span></div>
                         </div>
                         <div class="card-qr">
-                            <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=<?= urlencode($s['qr_token']) ?>" alt="QR">
+                            <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=<?= urlencode($s['nisn']) ?>" alt="QR">
                             <span>QR Absen</span>
                         </div>
                     </div>
                     <div class="card-footer">Kartu ini wajib dibawa setiap hari</div>
+                    <div class="card-ttd">
+                        <img src="../assets/ttd_kepsek.png?v=4" alt="Tanda tangan Kepala Sekolah">
+                    </div>
                     <img class="watermark" src="../assets/logo_sman1.png" alt="">
                 </div>
             <?php endforeach; ?>

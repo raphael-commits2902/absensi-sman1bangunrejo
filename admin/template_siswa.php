@@ -20,11 +20,11 @@ echo "\xEF\xBB\xBF";
 $out = fopen('php://output', 'w');
 
 // Header
-fputcsv($out, ['NISN', 'Nama', 'Kelas', 'Tempat Lahir', 'Tanggal Lahir', 'Jenis Kelamin', 'Alamat']);
+fputcsv($out, ['NISN', 'Nama', 'Kelas', 'Tempat Lahir', 'Tanggal Lahir', 'Jenis Kelamin', 'Alamat', 'Foto (link Google Drive)']);
 
 // Contoh baris (hapus sebelum import, atau biarkan — baris ini bisa diisi data siswa Anda)
-fputcsv($out, ['0123456789', 'Budi Santoso', 'XII IPS 1', 'Bangunrejo', '2009-05-12', 'L', 'Desa Bangunrejo RT 01']);
-fputcsv($out, ['0123456790', 'Siti Aminah', 'XII IPS 1', 'Gunung Sugih', '2009-08-03', 'P', 'Gunung Sugih Timur']);
+fputcsv($out, ['0123456789', 'Budi Santoso', 'XII IPS 1', 'Bangunrejo', '2009-05-12', 'L', 'Desa Bangunrejo RT 01', 'https://drive.google.com/file/d/DRIVE_FILE_ID/view']);
+fputcsv($out, ['0123456790', 'Siti Aminah', 'XII IPS 1', 'Gunung Sugih', '2009-08-03', 'P', 'Gunung Sugih Timur', '']);
 
 fclose($out);
 exit;

@@ -215,10 +215,10 @@ $total_hadir = $stmt_count->fetchColumn();
             <div class="card-qr">
                 <div class="qr-wrapper">
                     <!-- Memanggil API QR gratis dengan resolusi tinggi -->
-                    <img src="https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=<?= urlencode($student['qr_token']) ?>" alt="QR Absen">
+                    <img src="https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=<?= urlencode($student['nisn']) ?>" alt="QR Absen">
                 </div>
                 <p>Tunjukkan kartu QR Code ini di depan kamera Scanner Absensi milik petugas atau guru saat Anda masuk ke lingkungan sekolah.</p>
-                <a href="https://api.qrserver.com/v1/create-qr-code/?size=600x600&data=<?= urlencode($student['qr_token']) ?>" target="_blank" class="btn-action">
+                <a href="https://api.qrserver.com/v1/create-qr-code/?size=600x600&data=<?= urlencode($student['nisn']) ?>" target="_blank" class="btn-action">
                     <i class="fa-solid fa-download"></i> Buka & Unduh QR
                 </a>
             </div>

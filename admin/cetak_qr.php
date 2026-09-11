@@ -127,7 +127,7 @@ if (!empty($filter_class)) {
                     <div class="card-school">Kartu Absensi Digital</div>
                     <h2><?= htmlspecialchars($s['name']) ?></h2>
                     <div class="card-nis">NISN: <?= htmlspecialchars(!empty($s['nisn']) ? $s['nisn'] : '-') ?></div>
-                    <img src="https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=<?= urlencode($s['qr_token']) ?>" alt="QR <?= htmlspecialchars($s['name']) ?>">
+                    <img src="https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=<?= urlencode($s['nisn']) ?>" alt="QR <?= htmlspecialchars($s['name']) ?>">
                     <div class="card-footer">KARTU ABSENSI RESMI</div>
                 </div>
             <?php endforeach; ?>

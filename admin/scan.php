@@ -95,6 +95,16 @@ if (empty($jam_batas)) $jam_batas = '';
         .scan-panel h3 { font-size: 18px; font-weight: 700; margin-bottom: 8px; color: var(--dark); display: flex; align-items: center; gap: 10px; }
         .scan-panel h3 i { color: var(--success); }
         .scan-hint { font-size: 13px; color: var(--gray); margin-bottom: 20px; }
+        .scan-mode-switch { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+        .scan-mode-btn { display: inline-flex; align-items: center; gap: 8px; padding: 10px 18px; border: 2px solid var(--border); background: white; color: var(--gray); border-radius: 10px; font-weight: 700; font-size: 14px; cursor: pointer; transition: all 0.2s ease; }
+        .scan-mode-btn.active { border-color: var(--primary); background: var(--primary-light); color: var(--primary); }
+        .scan-mode-btn:hover { border-color: var(--primary); }
+        .scanner-box { display: flex; flex-direction: column; align-items: center; gap: 14px; text-align: center; border: 2px dashed var(--primary); border-radius: 16px; background: var(--primary-light); padding: 30px 20px; }
+        .scanner-box > i { font-size: 48px; color: var(--primary); }
+        .scanner-box label { font-size: 15px; font-weight: 700; color: var(--dark); }
+        .scanner-box input { width: 100%; max-width: 420px; padding: 14px 18px; border: 2px solid var(--border); border-radius: 12px; font-size: 16px; color: var(--dark-secondary); outline: none; background: white; text-align: center; letter-spacing: 1px; transition: all 0.2s ease; }
+        .scanner-box input:focus { border-color: var(--success); box-shadow: 0 0 0 4px rgba(16,185,129,0.15); }
+        .scanner-box small { font-size: 12px; color: var(--gray); }
         #reader { width: 100%; border-radius: 12px; overflow: hidden; }
         #reader video { border-radius: 12px; }
         .btn-back { display: inline-flex; align-items: center; gap: 8px; margin-top: 25px; padding: 12px 24px; background: var(--dark); color: white; text-decoration: none; border-radius: 10px; font-weight: 700; font-size: 14px; transition: all 0.2s ease; }
@@ -195,6 +205,7 @@ if (empty($jam_batas)) $jam_batas = '';
                     <li><a href="scan?type=pulang" class="<?= $type === 'pulang' ? 'active' : '' ?>"><i class="fa-solid fa-right-from-bracket"></i> <span>Absen Pulang</span></a></li>
                     <li><a href="scan?type=sholat" class="<?= $type === 'sholat' ? 'active' : '' ?>"><i class="fa-solid fa-mosque"></i> <span>Absen Sholat</span></a></li>
                     <li><a href="waktu_absensi"><i class="fa-solid fa-clock"></i> <span>Waktu Absensi</span></a></li>
+                    <li><a href="hapus_data"><i class="fa-solid fa-broom"></i> <span>Bersihkan Data</span></a></li>
                 </ul>
             </li>
             <li><a href="data_siswa"><i class="fa-solid fa-users"></i> <span>Data Siswa</span></a></li>
@@ -222,7 +233,28 @@ if (empty($jam_batas)) $jam_batas = '';
         <div class="scan-panel">
             <h3><i class="fa-solid <?= $title[2] ?>"></i> <?= $title[0] ?></h3>
             <div class="scan-hint"><?= $title[1] ?></div>
-            <div id="reader"></div>
+
+            <!-- Mode Switch: Kamera / Scanner Alat -->
+            <div class="scan-mode-switch">
+                <button type="button" id="btnCamera" class="scan-mode-btn active" onclick="setMode('camera')"><i class="fa-solid fa-camera"></i> Kamera</button>
+                <button type="button" id="btnScanner" class="scan-mode-btn" onclick="setMode('scanner')"><i class="fa-solid fa-qrcode"></i> Scanner Alat (USB)</button>
+            </div>
+
+            <!-- Mode Kamera -->
+            <div id="cameraMode">
+                <div id="reader"></div>
+            </div>
+
+            <!-- Mode Scanner Alat (keyboard-wedge USB) -->
+            <div id="scannerMode" style="display:none;">
+                <div class="scanner-box">
+                    <i class="fa-solid fa-qrcode"></i>
+                    <label for="scannerInput">Arahkan kursor ke kotak ini, lalu scan kartu siswa dengan alat scanner.</label>
+                    <input type="text" id="scannerInput" name="scannerInput" autocomplete="off" placeholder="Scan kartu siswa..." autofocus>
+                    <small>Scanner akan mengetik otomatis dan submit setelah selesai. Pastikan kartu berisi token QR absen siswa.</small>
+                </div>
+            </div>
+
             <a href="index" class="btn-back"><i class="fa-solid fa-arrow-left"></i> Kembali ke Dashboard</a>
         </div>
 
@@ -292,7 +324,7 @@ if (empty($jam_batas)) $jam_batas = '';
                 : `<div style="width:110px;height:110px;border-radius:50%;background:linear-gradient(135deg,#3b82f6,#10b981);display:flex;align-items:center;justify-content:center;font-size:40px;font-weight:800;color:white;margin:10px auto;">${data.name.charAt(0).toUpperCase()}</div>`;
 
             Swal.fire({
-                title: terlambat ? '⚠️ Terlambat' : '✅ Berhasil ' + data.jenis,
+                title: terlambat ? '⚠️ Terlambat Absen ' + data.jenis : '✅ Berhasil Absen ' + data.jenis,
                 html: `
                     ${photoHtml}
                     <div style="font-size:22px;font-weight:800;color:#0f172a;margin-top:12px;">${data.name}</div>
@@ -300,25 +332,30 @@ if (empty($jam_batas)) $jam_batas = '';
                     <div style="font-size:14px;color:${terlambat ? '#d97706' : '#64748b'};">Pukul ${time} WIB${terlambat ? ` (melewati batas ${batas})` : ''}</div>
                 `,
                 icon: terlambat ? 'warning' : 'success',
-                showConfirmButton: false,
-                timer: 2500,
+                showConfirmButton: true,
+                confirmButtonText: 'OK',
+                confirmButtonColor: '#10b981',
                 width: 380
+            }).then(function() {
+                // Setelah alert ditutup, refocus input scanner agar bisa scan berikutnya
+                if (currentMode === 'scanner') document.getElementById('scannerInput').focus();
             });
         }
 
-        function onScanSuccess(decodedText, decodedResult) {
-            if (!isScanning) return; // Mencegah scan berulang saat loading
+        // Proses token QR (dipakai kamera & scanner alat sama-sama)
+        function processToken(token) {
+            if (!isScanning) return; // Mencegah scan ganda saat loading
             isScanning = false;
 
-            // Membunyikan nada beep (opsional)
+            // Suara beep
             let audio = new Audio('https://www.soundjay.com/button/beep-07.wav');
-            audio.play();
+            audio.play().catch(() => {});
 
             // Kirim data ke backend
             fetch('proses_scan.php', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: 'qr_token=' + encodeURIComponent(decodedText) + '&type=' + encodeURIComponent(scanType)
+                body: 'qr_token=' + encodeURIComponent(token) + '&type=' + encodeURIComponent(scanType)
             })
             .then(response => response.json())
             .then(data => {
@@ -328,13 +365,81 @@ if (empty($jam_batas)) $jam_batas = '';
                 } else {
                     Swal.fire('Gagal!', data.message, 'error');
                 }
-                // Jeda 3 detik sebelum bisa scan lagi
-                setTimeout(() => { isScanning = true; }, 3000);
+                // Jeda 3 detik sebelum bisa scan lagi, lalu refocus input scanner
+                setTimeout(() => {
+                    isScanning = true;
+                    if (currentMode === 'scanner') document.getElementById('scannerInput').focus();
+                }, 3000);
+            })
+            .catch(() => {
+                Swal.fire('Error', 'Kesalahan koneksi jaringan!', 'error');
+                isScanning = true;
             });
         }
 
+        function onScanSuccess(decodedText, decodedResult) {
+            processToken(decodedText);
+        }
+
+        // Mode aktif saat ini
+        let currentMode = 'camera';
         let html5QrcodeScanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: {width: 250, height: 250} }, false);
         html5QrcodeScanner.render(onScanSuccess);
+
+        function setMode(mode) {
+            currentMode = mode;
+            document.getElementById('btnCamera').classList.toggle('active', mode === 'camera');
+            document.getElementById('btnScanner').classList.toggle('active', mode === 'scanner');
+            document.getElementById('cameraMode').style.display = mode === 'camera' ? 'block' : 'none';
+            document.getElementById('scannerMode').style.display = mode === 'scanner' ? 'block' : 'none';
+
+            if (mode === 'scanner') {
+                // Hidupkan input scanner & fokuskan kursor
+                scannerInput.focus();
+            }
+            // Kamera terus berjalan di background agar tak perlu start ulang
+        }
+
+        // --- Scanner Alat (keyboard-wedge USB) ---
+        const scannerInput = document.getElementById('scannerInput');
+        let scanBuffer = '';
+        let scanTimer = null;
+
+        // Scanner biasanya mengetik token lalu menekan Enter (suffix)
+        scannerInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                const v = scannerInput.value.trim();
+                if (v && v.length > 0) {
+                    processToken(v);
+                }
+                scannerInput.value = '';
+            }
+        });
+
+        // Fallback: jika scanner tidak mengirim Enter, auto-submit saat jeda ketikan
+        document.addEventListener('keypress', function(e) {
+            if (currentMode !== 'scanner') return;
+            if (e.target !== scannerInput) {
+                // pastikan ketikan masuk ke scannerInput
+                scannerInput.focus();
+            }
+            clearTimeout(scanTimer);
+            scanTimer = setTimeout(function() {
+                const v = scannerInput.value.trim();
+                if (v && v.length > 5) {
+                    processToken(v);
+                }
+                scannerInput.value = '';
+            }, 300);
+        });
+
+        // Jaga fokus tetap di input scanner agar tidak lolos
+        document.addEventListener('click', function(e) {
+            if (currentMode === 'scanner') {
+                scannerInput.focus();
+            }
+        });
 
         function toggleSidebar() {
             document.getElementById('sidebar').classList.toggle('active');

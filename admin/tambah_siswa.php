@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 // Tampilkan error saat pengembangan
 
 session_start();
@@ -19,147 +19,559 @@ $import_errors = [];
 // Ambil daftar kelas dari database
 $classes = $pdo->query("SELECT name FROM kelas ORDER BY name ASC")->fetchAll(PDO::FETCH_COLUMN);
 
-// ============ PROSES IMPORT MASAL (Upload CSV) ============
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['file_csv'])) {
-    $file = $_FILES['file_csv'];
+/**
+ * Simpan & kompres foto siswa (resize maks 400px, output JPG kualitas 85).
+ * @param string $src  Path file sumber gambar
+ * @param string $nisn NISN untuk penamaan file
+ * @return string Path relatif foto (mis. assets/foto_siswa/123.jpg) atau '' bila gagal
+ */
+function absensi_save_photo($src, $nisn)
+{
+    if (!is_dir('../assets/foto_siswa')) @mkdir('../assets/foto_siswa', 0777, true);
+    if (!is_file($src) || filesize($src) <= 0) return '';
+    $info = @getimagesize($src);
+    if (!$info) return '';
+    $img = null;
+    switch ($info[2]) {
+        case IMAGETYPE_JPEG: $img = @imagecreatefromjpeg($src); break;
+        case IMAGETYPE_PNG:  $img = @imagecreatefrompng($src);  break;
+        case IMAGETYPE_WEBP: $img = @imagecreatefromwebp($src); break;
+        default: return '';
+    }
+    if (!$img) return '';
 
-    if ($file['error'] !== UPLOAD_ERR_OK) {
-        $import_success = 'Gagal mengunggah file. Pastikan file CSV dipilih dengan benar.';
-        $import_errors[] = 'error';
-    } elseif ($file['size'] <= 0) {
-        $import_success = 'File yang diunggah kosong.';
-        $import_errors[] = 'error';
-    } else {
-        $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
-        if ($ext !== 'csv' && $ext !== 'txt') {
-            $import_success = 'Format file harus CSV (.csv) — gunakan kolom: NISN, Nama, Kelas.';
-            $import_errors[] = 'error';
-        } else {
-            $handle = fopen($file['tmp_name'], 'r');
-            if ($handle) {
-                $first_line = fgets($handle);
-                rewind($handle);
-                $delimiter = (substr_count($first_line, ';') >= substr_count($first_line, ',')) ? ';' : ',';
+    $w = imagesx($img);
+    $h = imagesy($img);
+    $max = 400;
+    if ($w > $max || $h > $max) {
+        $ratio = $max / max($w, $h);
+        $nw = (int)($w * $ratio);
+        $nh = (int)($h * $ratio);
+        $dst = imagecreatetruecolor($nw, $nh);
+        if ($info[2] === IMAGETYPE_PNG) {
+            imagealphablending($dst, false);
+            imagesavealpha($dst, true);
+            $transparent = imagecolorallocatealpha($dst, 255, 255, 255, 127);
+            imagefill($dst, 0, 0, $transparent);
+        }
+        imagecopyresampled($dst, $img, 0, 0, 0, 0, $nw, $nh, $w, $h);
+        imagedestroy($img);
+        $img = $dst;
+    }
 
-                $berhasil = 0;
-                $duplikat = 0;
-                $gagal = 0;
-                $baris = 0;
-                $row_errors = [];
-                $nisn_seen = [];
+    $foto_name = $nisn . '_' . time() . '.jpg';
+    $out = '../assets/foto_siswa/' . $foto_name;
+    $ok = @imagejpeg($img, $out, 85);
+    imagedestroy($img);
+    return $ok ? 'assets/foto_siswa/' . $foto_name : '';
+}
 
-                while (($row = fgetcsv($handle, 0, $delimiter)) !== false) {
-                    $baris++;
+/**
+ * Membaca file spreadsheet menjadi array baris.
+ * Mendukung .xlsx (ZIP berisi XML — di-parse langsung, tanpa Composer) dan .csv/.txt.
+ * @param string $file Parser: jalur file yang diunggah
+ * @param string $ext  Ekstensi file (xlsx / csv / txt)
+ * @return array Array baris (masing-masing array kolom)
+ */
+function absensi_spreadsheet_rows($file, $ext)
+{
+    $ext = strtolower($ext);
+    $rows = [];
+    if ($ext === 'xlsx') {
+        $zip = new ZipArchive();
+        if ($zip->open($file) !== true) return $rows;
 
-                    // Lewati baris kosong atau header (NISN, Nama, Kelas)
-                    $kolom1 = trim(preg_replace('/^\xEF\xBB\xBF/', '', isset($row[0]) ? $row[0] : ''));
-                    if (strtolower($kolom1) === 'nisn') continue;
-                    if (count($row) < 3 || trim(implode('', $row)) === '') continue;
-
-                    $nisn = $kolom1;
-                    $name = trim(isset($row[1]) ? $row[1] : '');
-                    $class = trim(isset($row[2]) ? $row[2] : '');
-                    $tempat_lahir = trim(isset($row[3]) ? $row[3] : '');
-                    $tanggal_lahir = trim(isset($row[4]) ? $row[4] : '');
-                    $jenis_kelamin = trim(isset($row[5]) ? $row[5] : '');
-                    $alamat = trim(isset($row[6]) ? $row[6] : '');
-
-                    // Normalisasi tanggal lahir (dukung YYYY-MM-DD atau DD-MM-YYYY, validasi ketat)
-                    $tgl_lahir_db = null;
-                    if (!empty($tanggal_lahir)) {
-                        $raw_tgl = str_replace('/', '-', $tanggal_lahir);
-                        foreach (array('Y-m-d', 'd-m-Y') as $fmt) {
-                            $d = DateTime::createFromFormat($fmt, $raw_tgl);
-                            if ($d && $d->format($fmt) === $raw_tgl) {
-                                $tgl_lahir_db = $d->format('Y-m-d');
-                                break;
-                            }
-                        }
-                    }
-                    // Normalisasi jenis kelamin: terima L/P, laki-laki/perempuan, pria/wanita, dll.
-                    $jk_upper = strtoupper(trim($jenis_kelamin));
-                    if (in_array($jk_upper, array('L', 'LAKI', 'LAKI-LAKI', 'LAKI LAKI', 'PRIA', 'COWOK', 'MALE'))) {
-                        $jenis_kelamin = 'L';
-                    } elseif (in_array($jk_upper, array('P', 'PEREMPUAN', 'WANITA', 'CEWEK', 'CEW', 'FEMALE'))) {
-                        $jenis_kelamin = 'P';
-                    } else {
-                        $jenis_kelamin = null;
-                    }
-
-                    if (empty($nisn) || empty($name) || empty($class)) {
-                        $gagal++;
-                        $row_errors[] = "Baris $baris: kolom tidak lengkap (NISN, Nama, Kelas wajib diisi).";
-                        continue;
-                    }
-
-                    // Cek duplikat NISN di dalam file
-                    if (isset($nisn_seen[$nisn])) {
-                        $duplikat++;
-                        $row_errors[] = "Baris $baris: NISN <strong>$nisn</strong> muncul lebih dari satu kali di file.";
-                        continue;
-                    }
-                    $nisn_seen[$nisn] = true;
-
-                    try {
-                        // Cek NISN sudah terdaftar di database
-                        $stmt_check = $pdo->prepare("SELECT id FROM students WHERE nisn = ?");
-                        $stmt_check->execute([$nisn]);
-                        if ($stmt_check->rowCount() > 0) {
-                            $duplikat++;
-                            $row_errors[] = "Baris $baris: NISN <strong>$nisn</strong> sudah terdaftar di sistem.";
-                            continue;
-                        }
-
-                        // Mulai transaksi database per baris
-                        $pdo->beginTransaction();
-
-                        // Pastikan kelas terdaftar di tabel kelas (auto-daftar jika belum ada)
-                        $stmt_cek_kelas = $pdo->prepare("SELECT id FROM kelas WHERE name = ?");
-                        $stmt_cek_kelas->execute([$class]);
-                        if ($stmt_cek_kelas->rowCount() === 0) {
-                            $pdo->prepare("INSERT INTO kelas (name) VALUES (?)")->execute([$class]);
-                        }
-
-                        // Buat akun login: username & password default = NISN
-                        $hashed_password = password_hash($nisn, PASSWORD_DEFAULT);
-                        $stmt_user = $pdo->prepare("INSERT INTO users (username, password, role) VALUES (?, ?, 'student')");
-                        $stmt_user->execute([$nisn, $hashed_password]);
-                        $user_id = $pdo->lastInsertId();
-
-                        // Generate Token QR Code Unik
-                        $random_string = bin2hex(random_bytes(16));
-                        $qr_token = $random_string . '_' . $nisn;
-
-                        $stmt_student = $pdo->prepare("INSERT INTO students (user_id, nis, nisn, name, tempat_lahir, tanggal_lahir, jenis_kelamin, alamat, class, qr_token) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-                        $stmt_student->execute([$user_id, $nisn, $nisn, $name, $tempat_lahir, $tgl_lahir_db, $jenis_kelamin, $alamat, $class, $qr_token]);
-
-                        $pdo->commit();
-                        $berhasil++;
-                    } catch (Exception $e) {
-                        if ($pdo->inTransaction()) {
-                            $pdo->rollBack();
-                        }
-                        $gagal++;
-                        $row_errors[] = "Baris $baris: $nisn — " . $e->getMessage();
-                    }
-                }
-                fclose($handle);
-
-                $import_success = "Import selesai! <strong>$berhasil siswa</strong> berhasil ditambahkan.";
-                if ($duplikat > 0) {
-                    $import_success .= " <strong>$duplikat</strong> dilewati karena NISN duplikat.";
-                }
-                if ($gagal > 0) {
-                    $import_success .= " <strong>$gagal</strong> baris gagal diproses.";
-                }
-                $import_errors = $row_errors;
-            } else {
-                $import_success = 'Tidak dapat membaca file yang diunggah.';
-                $import_errors[] = 'error';
+        // Muat shared strings (teks di Excel sering disimpan di sini, dirujuk via indeks)
+        $shared = [];
+        if ($ssXml = $zip->getFromName('xl/sharedStrings.xml')) {
+            $ssXml = preg_replace('/xmlns(:[a-z0-9]+)?="[^"]*"/i', '', $ssXml);
+            $ss = @simplexml_load_string($ssXml);
+            if ($ss) foreach ($ss->si ?? [] as $si) {
+                $t = '';
+                foreach ($si->t ?? [] as $tt) $t .= (string)$tt;
+                $shared[] = $t;
             }
         }
+
+        // Sheet pertama biasanya xl/worksheets/sheet1.xml (fallback cari sheet pertama)
+        $sheet = null;
+        for ($i = 1; $i <= 20; $i++) {
+            $name = 'xl/worksheets/sheet' . $i . '.xml';
+            if ($zip->getFromName($name) !== false) { $sheet = $name; break; }
+        }
+        if (!$sheet) { $zip->close(); return $rows; }
+        $xml = $zip->getFromName($sheet);
+        $zip->close();
+
+        // Hapus deklarasi namespace default agar SimpleXML bisa mengakses elemen langsung
+        $xml = preg_replace('/xmlns(:[a-z0-9]+)?="[^"]*"/i', '', $xml);
+
+        $sx = @simplexml_load_string($xml);
+        if (!$sx) return $rows;
+        // Batasi jumlah baris yang diproses (anti-macet untuk file sangat besar/rusak)
+        $max_rows = 5000;
+        // Baris berada di dalam <sheetData>, bukan anak langsung <worksheet>
+        $sheetData = $sx->sheetData ?? $sx;
+        foreach ($sheetData->row ?? [] as $row) {
+            if (count($rows) >= $max_rows) break;
+            $cols = [];
+            foreach ($row->c ?? [] as $cell) {
+                $type = (string)($cell['t'] ?? '');
+                // Tandai sel ANGKA: tanpa atribut t (default "n") atau t="n".
+                // Dipakai aplikasi untuk memulihkan nol depan NISN yang dibuang Excel.
+                if ($type === '' || $type === 'n') {
+                    $cols[] = ['v' => isset($cell->v) ? trim((string)$cell->v) : '', 'num' => true];
+                } elseif ($type === 'inlineStr') {
+                    $cols[] = ['v' => trim((string)$cell->is->t), 'num' => false];
+                } elseif ($type === 's' && isset($cell->v)) {
+                    $idx = (int)trim((string)$cell->v);
+                    $cols[] = ['v' => $shared[$idx] ?? '', 'num' => false];
+                } else {
+                    $cols[] = ['v' => isset($cell->v) ? trim((string)$cell->v) : '', 'num' => false];
+                }
+            }
+            $rows[] = $cols;
+        }
+    } else {
+        // CSV / TXT: deteksi delimiter seperti proses utama
+        $h = fopen($file, 'r');
+        if (!$h) return $rows;
+        $first = fgets($h); rewind($h);
+        $delim = (substr_count($first, ';') >= substr_count($first, ',')) ? ';' : ',';
+        while (($r = fgetcsv($h, 0, $delim)) !== false) {
+            if (count($rows) >= 5000) break;
+            $rows[] = $r;
+        }
+        fclose($h);
+    }
+    return $rows;
+}
+
+/**
+ * Normalisasi NISN — APLIKASI yang mengubah angka menjadi teks.
+ *  - Sel TEKS  : dipertahankan apa adanya (nol depan utuh). "0106982596" -> "0106982596"
+ *  - Sel ANGKA : Excel sudah membuang nol depan. Dipulihkan otomatis menjadi 10 digit
+ *                (standar NISN nasional): 106982596 -> 0106982596.
+ *                Jika >= 10 digit, dipakai apa adanya (nol depan memang tidak ada).
+ *  - "3.10371048E+9" (notasi ilmiah) -> "3103710480"
+ *  - Serial tanggal di kolom NISN (46266.69) -> ditolak ('')
+ * @param string $v      Nilai mentah sel
+ * @param bool   $is_num true bila sel Excel bertipe angka
+ * @return string Digit bersih, atau '' bila tidak valid.
+ */
+function absensi_normalize_nisn($v, $is_num = false)
+{
+    $v = trim((string)$v);
+    if ($v === '') return '';
+
+    // Notasi ilmiah Excel: 3.10371048E+9 -> 3103710480
+    if (preg_match('/^\d(\.\d+)?E\+?(\d+)$/i', $v)) {
+        $v = number_format((float)$v, 0, '', '');
+        $is_num = true;
+    }
+
+    // Serial tanggal Excel di kolom NISN (mis. 46266.69) -> jelas salah kolom, tolak
+    if (preg_match('/^\d{4,5}\.\d+$/', $v)) return '';
+
+    // Pertahankan nol depan: ambil digit apa adanya tanpa konversi angka
+    $digits = preg_replace('/\D/', '', $v);
+    if ($digits === '' || strlen($digits) < 4 || strlen($digits) > 15) return '';
+
+    // Sel ANGKA (bukan teks): Excel membuang nol depannya -> pulihkan ke 10 digit NISN
+    if ($is_num && strlen($digits) === 9 && $digits[0] !== '0') {
+        $digits = '0' . $digits;
+    }
+    // Sel TEKS: biarkan apa adanya (nol depan utuh, tanpa perubahan)
+    return $digits;
+}
+
+/**
+ * Normalisasi tanggal lahir dari Excel/CSV — menerima DATE dan TEKS:
+ *  - Objek/tanggal asli Excel: nilai serial (mis. 39911) jika kolom diformat date
+ *  - Serial number Excel (39911) -> 2009-04-01
+ *  - "2009-05-12", "2009/05/12", "12-05-2009", "12/05/2009"
+ *  - "12 Mei 2009" (nama bulan Indonesia)
+ * @param string $v
+ * @return string|null Y-m-d atau null bila tidak valid
+ */
+function absensi_normalize_tanggal($v, $is_num = false)
+{
+    $v = trim((string)$v);
+    if ($v === '') return null;
+
+    // Sel ANGKA dari Excel = serial tanggal otomatis (tanggal asli Excel)
+    if ($is_num && preg_match('/^\d{1,7}(\.\d+)?$/', $v)) {
+        $serial = (float)$v;
+        if ($serial >= 20000 && $serial <= 60000) {
+            $base = new DateTime('1899-12-30');
+            $base->modify('+' . floor($serial) . ' days');
+            return $base->format('Y-m-d');
+        }
+        return null;
+    }
+
+    // TEKS: bisa berupa serial Excel (jika diketik manual) atau format tanggal teks
+    if (preg_match('/^\d{4,6}(\.\d+)?$/', $v)) {
+        $serial = (float)$v;
+        if ($serial >= 20000 && $serial <= 60000) {
+            $base = new DateTime('1899-12-30');
+            $base->modify('+' . floor($serial) . ' days');
+            return $base->format('Y-m-d');
+        }
+        return null;
+    }
+
+    $raw = str_replace('/', '-', $v);
+    // TEKS: Y-m-d atau d-m-Y
+    foreach (array('Y-m-d', 'd-m-Y') as $fmt) {
+        $d = DateTime::createFromFormat($fmt, $raw);
+        if ($d && $d->format($fmt) === $raw) {
+            return $d->format('Y-m-d');
+        }
+    }
+    // TEKS: nama bulan Indonesia, "12 Mei 2009"
+    $bulan = ['januari'=>'01','februari'=>'02','maret'=>'03','april'=>'04','mei'=>'05','juni'=>'06',
+              'juli'=>'07','agustus'=>'08','september'=>'09','oktober'=>'10','november'=>'11','desember'=>'12'];
+    if (preg_match('/^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})$/u', $v, $m)) {
+        $b = strtolower($m[2]);
+        if (isset($bulan[$b])) {
+            return sprintf('%04d-%02d-%02d', $m[3], $bulan[$b], (int)$m[1]);
+        }
+    }
+    return null;
+}
+
+/**
+ * Download & simpan foto dari Google Drive (share link) lalu kompres.
+ * Mendukung format link:
+ *  - https://drive.google.com/file/d/FILE_ID/view
+ *  - https://drive.google.com/open?id=FILE_ID
+ *  - https://drive.google.com/uc?id=FILE_ID
+ * @param string $drive  Link / teks Google Drive
+ * @param string $nisn   Untuk penamaan file
+ * @return string Path relatif foto ('' bila gagal)
+ */
+function absensi_foto_from_drive($drive, $nisn)
+{
+    $drive = trim((string)$drive);
+    if ($drive === '') return '';
+    // Ekstrak File ID dari berbagai format URL Drive
+    if (preg_match('#/file/d/([A-Za-z0-9_-]+)#', $drive, $m)) {
+        $id = $m[1];
+    } elseif (preg_match('#[?&](?:id|openid)=([A-Za-z0-9_-]+)#', $drive, $m)) {
+        $id = $m[1];
+    } elseif (preg_match('#^([A-Za-z0-9_-]{20,})$#', $drive, $m)) {
+        $id = $m[1];
+    } else {
+        return '';
+    }
+    if (empty($id)) return '';
+    $url = 'https://drive.google.com/uc?export=download&id=' . urlencode($id);
+
+    // Timeout kecil (4 detik) agar baris tidak menggantung lama bila link tidak valid.
+    // Import ratusan baris tidak boleh terkunci menunggu download tiap siswa.
+    $ctx = stream_context_create([
+        'http' => ['timeout' => 4, 'follow_location' => 1, 'user_agent' => 'Mozilla/5.0'],
+        'ssl' => ['verify_peer' => false, 'verify_peer_name' => false],
+    ]);
+    $img = @file_get_contents($url, false, $ctx);
+    if ($img === false || strlen($img) < 100) return '';
+
+    $tmp = tempnam(sys_get_temp_dir(), 'gd') . '.img';
+    @file_put_contents($tmp, $img);
+    $foto = absensi_save_photo($tmp, $nisn);
+    @unlink($tmp);
+    return $foto;
+}
+
+// ============ PROSES IMPORT MASAL (ZIP / Excel / CSV + Foto + Foto Drive) ============
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_FILES['file_zip']) || isset($_FILES['file_csv']))) {
+
+    $import_success = '';
+    $import_errors = [];
+    $tmp_dir = null;
+
+    // Sumber baris data & foto
+    $data_rows = [];
+    $photo_dir = null;
+    $uploaded_photos = []; // nisn => tmp path (dari input file_fotos[])
+    $photo_source_is_zip = false;
+
+    // Kumpulkan foto yang di-upload langsung (file_fotos[])
+    if (isset($_FILES['file_fotos']) && is_array($_FILES['file_fotos']['name'])) {
+        $pf = $_FILES['file_fotos'];
+        $n = count($pf['name']);
+        for ($i = 0; $i < $n; $i++) {
+            if ($pf['error'][$i] !== UPLOAD_ERR_OK) continue;
+            $orig = $pf['name'][$i];
+            $ext = strtolower(pathinfo($orig, PATHINFO_EXTENSION));
+            if (!in_array($ext, ['jpg', 'jpeg', 'png', 'webp'])) continue;
+            $nisn_foto = pathinfo($orig, PATHINFO_FILENAME);
+            $uploaded_photos[$nisn_foto] = $pf['tmp_name'][$i];
+        }
+    }
+
+    if (isset($_FILES['file_zip']) && $_FILES['file_zip']['error'] === UPLOAD_ERR_OK) {
+        $zip_ext = strtolower(pathinfo($_FILES['file_zip']['name'], PATHINFO_EXTENSION));
+        if ($zip_ext !== 'zip') {
+            $import_success = 'Format file harus ZIP.';
+            $import_errors[] = 'error';
+        } else {
+            $tmp_dir = sys_get_temp_dir() . '/absensi_imp_' . uniqid();
+            @mkdir($tmp_dir, 0777, true);
+            $zip = new ZipArchive();
+            if ($zip->open($_FILES['file_zip']['tmp_name']) !== true) {
+                $import_success = 'Gagal membuka file ZIP. Pastikan ZIP tidak rusak.';
+                $import_errors[] = 'error';
+            } else {
+                $zip->extractTo($tmp_dir);
+                $zip->close();
+                // Cari file data (.csv / .xlsx) di mana saja di dalam ZIP (lewati folder junk)
+                $data_found = null;
+                $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($tmp_dir, FilesystemIterator::SKIP_DOTS));
+                foreach ($it as $f) {
+                    if (!$f->isFile()) continue;
+                    $fe = strtolower($f->getExtension());
+                    if (in_array($fe, ['csv', 'xlsx'])) { $data_found = $f->getPathname(); break; }
+                }
+                if (!$data_found) {
+                    $import_success = 'File ZIP tidak berisi file data (.csv / .xlsx).';
+                    $import_errors[] = 'error';
+                } else {
+                    $data_rows = absensi_spreadsheet_rows($data_found, pathinfo($data_found, PATHINFO_EXTENSION));
+                    $photo_dir = $tmp_dir;
+                    $photo_source_is_zip = true;
+                }
+            }
+        }
+    } elseif (isset($_FILES['file_csv']) && $_FILES['file_csv']['error'] === UPLOAD_ERR_OK) {
+        $file = $_FILES['file_csv'];
+        if ($file['size'] <= 0) {
+            $import_success = 'File yang diunggah kosong.';
+            $import_errors[] = 'error';
+        } else {
+            $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+            if (!in_array($ext, ['csv', 'xlsx'])) {
+                $import_success = 'Format file harus CSV (.csv) atau Excel (.xlsx) — kolom: NISN, Nama, Kelas.';
+                $import_errors[] = 'error';
+            } else {
+                $data_rows = absensi_spreadsheet_rows($file['tmp_name'], $ext);
+            }
+        }
+    } else {
+        $import_success = 'Pilih file ZIP, Excel, atau CSV terlebih dahulu.';
+        $import_errors[] = 'error';
+    }
+
+    if (!empty($data_rows)) {
+
+        // Jangan batasi waktu eksekusi — import masal bisa memakan waktu lama, dan
+        // batas default 120s menyebabkan fatal "Maximum execution time exceeded".
+        @set_time_limit(0);
+        @ini_set('max_execution_time', '0');
+        @ini_set('memory_limit', '512M');
+
+        // LEPAS KUNCI SESSION — tanpa ini, halaman lain (login/dashboard/logout)
+        // ikut mengantre di session_start() selama import berjalan dan terasa "hang".
+        @session_write_close();
+
+        $berhasil = 0;
+        $duplikat = 0;
+        $gagal = 0;
+        $baris = 0;
+        $row_errors = [];
+        $nisn_seen = [];
+        $drive_deadline = null;  // anggaran waktu total unduhan foto Drive
+        $drive_skipped = 0;      // jumlah foto Drive yang dilewati karena budget habis
+
+        // Preload NISN siswa yang sudah terdaftar (sekali saja, hindari SELECT per baris)
+        foreach ($pdo->query("SELECT nisn FROM students WHERE nisn <> ''") as $r) {
+            $nisn_seen[$r['nisn']] = true;
+        }
+        // Preload kelas yang sudah ada (sekali saja)
+        $kelas_ada = [];
+        foreach ($pdo->query("SELECT name FROM kelas") as $r) {
+            $kelas_ada[$r['name']] = true;
+        }
+
+        // Helper: ambil foto berdasarkan NISN.
+        // 1) Dari upload langsung (file_fotos[]) 2) Dari folder ZIP (rekursif, NISN sebagai prefix)
+        $find_photo = function ($dir, $nisn) use ($uploaded_photos) {
+            // Foto yang di-upload langsung lewat input file_fotos[]
+            if (isset($uploaded_photos[$nisn])) return $uploaded_photos[$nisn];
+            if (!$dir) return null;
+            $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS));
+            foreach ($it as $f) {
+                if (!$f->isFile()) continue;
+                $ext = strtolower($f->getExtension());
+                if (!in_array($ext, ['jpg', 'jpeg', 'png', 'webp'])) continue;
+                $name = pathinfo($f->getFilename(), PATHINFO_FILENAME);
+                if ($name === $nisn || strpos($name, $nisn) === 0) return $f->getPathname();
+            }
+            return null;
+        };
+
+        // Mulai transaksi besar SEKALI untuk seluruh baris (jauh lebih cepat)
+        $pdo->beginTransaction();
+
+        $first = true;
+        foreach ($data_rows as $row) {
+            $baris++;
+
+            // Ambil nilai sel + tanda sel-angka (xlsx memberi array ['v'=>,'num'=>], CSV string biasa)
+            $cell_val = function ($i) use ($row) {
+                if (!isset($row[$i])) return ['', false];
+                $c = $row[$i];
+                if (is_array($c)) return [$c['v'], !empty($c['num'])];
+                return [trim((string)$c), false];
+            };
+            list($raw0, $nisn_is_num) = $cell_val(0);
+
+            // Lewati baris kosong, header, atau baris judul/petunjuk template
+            $kolom1 = trim(preg_replace('/^\xEF\xBB\xBF/', '', $raw0));
+            $is_header = (strtolower($kolom1) === 'nisn');
+            if ($is_header && $first) { $first = false; continue; }
+            if (stripos($kolom1, 'TEMPLATE IMPORT') === 0 || stripos($kolom1, 'PENTING:') === 0) continue;
+            $flat = [];
+            foreach ($row as $c) { $flat[] = is_array($c) ? $c['v'] : $c; }
+            if (count($row) < 3 || trim(implode('', $flat)) === '') continue;
+
+            // NISN: aplikasi mengubah angka -> teks (memulihkan nol depan yang dibuang Excel)
+            $nisn = absensi_normalize_nisn($kolom1, $nisn_is_num);
+            $name = trim($cell_val(1)[0]);
+            $class = trim($cell_val(2)[0]);
+            $tempat_lahir = trim($cell_val(3)[0]);
+            $tanggal_lahir = trim($cell_val(4)[0]);
+            $tanggal_is_num = $cell_val(4)[1];
+            $jenis_kelamin = trim($cell_val(5)[0]);
+            $alamat = trim($cell_val(6)[0]);
+            $foto_link_drive = trim($cell_val(7)[0]); // kolom Foto = link Google Drive
+
+            // Normalisasi tanggal lahir — menerima DATE (serial Excel) dan TEKS
+            $tgl_lahir_db = absensi_normalize_tanggal($tanggal_lahir, $tanggal_is_num);
+            // Normalisasi jenis kelamin: terima L/P, laki-laki/perempuan, pria/wanita, dll.
+            $jk_upper = strtoupper(trim($jenis_kelamin));
+            if (in_array($jk_upper, array('L', 'LAKI', 'LAKI-LAKI', 'LAKI LAKI', 'PRIA', 'COWOK', 'MALE'))) {
+                $jenis_kelamin = 'L';
+            } elseif (in_array($jk_upper, array('P', 'PEREMPUAN', 'WANITA', 'CEWEK', 'CEW', 'FEMALE'))) {
+                $jenis_kelamin = 'P';
+            } else {
+                $jenis_kelamin = null;
+            }
+
+            if (empty($nisn) || empty($name) || empty($class)) {
+                $gagal++;
+                $row_errors[] = "Baris $baris: kolom tidak lengkap / NISN tidak valid (NISN, Nama, Kelas wajib diisi).";
+                continue;
+            }
+
+            // NISN duplikat: baris pertama dipakai, duplikat berikutnya DILEWATI/dibuang
+            if (isset($nisn_seen[$nisn])) {
+                $duplikat++;
+                $row_errors[] = "Baris $baris: NISN <strong>$nisn</strong> muncul lebih dari satu kali — duplikat dibuang, hanya baris pertama yang disimpan.";
+                continue;
+            }
+            $nisn_seen[$nisn] = true;
+
+            // Cari foto (dari upload langsung / ZIP)
+            $isi_foto = null;
+            $foto = '';
+            $src = $find_photo($photo_dir, $nisn);
+            if ($src && is_file($src) && filesize($src) > 0) {
+                $isi_foto = $src;
+            }
+
+            // Simpan & kompres foto (jika ditemukan)
+            if ($isi_foto) {
+                $foto = absensi_save_photo($isi_foto, $nisn);
+                if ($foto === '' && $photo_source_is_zip) {
+                    // Fallback: salin apa adanya bila kompresi gagal
+                    $ext = strtolower(pathinfo($isi_foto, PATHINFO_EXTENSION));
+                    $foto_name = $nisn . '_' . time() . '.' . $ext;
+                    if (!is_dir('../assets/foto_siswa')) @mkdir('../assets/foto_siswa', 0777, true);
+                    if (copy($isi_foto, '../assets/foto_siswa/' . $foto_name)) $foto = 'assets/foto_siswa/' . $foto_name;
+                }
+            }
+            // Foto dari link Google Drive (kolom ke-8) — prioritas jika foto lokal tidak ada.
+            // Ada BUDGET WAKTU TOTAL (60s): setelah itu unduhan dihentikan agar import
+            // tidak berjam-jam. Foto yang gagal dilaporkan & bisa dilengkapi via Edit.
+            if ($foto === '' && !empty($foto_link_drive)) {
+                if ($drive_deadline === null) $drive_deadline = microtime(true) + 60;
+                if (microtime(true) < $drive_deadline) {
+                    $foto = absensi_foto_from_drive($foto_link_drive, $nisn);
+                    if ($foto === '') {
+                        $row_errors[] = "Baris $baris: $nisn — link foto Google Drive gagal diunduh (pastikan di-share 'Siapa saja dengan link').";
+                    }
+                } else {
+                    $drive_skipped++;
+                    $row_errors[] = "Baris $baris: $nisn — foto Drive dilewati (anggaran waktu unduh habis). Lengkapi lewat menu Edit.";
+                }
+            }
+
+            try {
+                // Pastikan kelas terdaftar di tabel kelas (auto-daftar jika belum ada)
+                if (!isset($kelas_ada[$class])) {
+                    $pdo->prepare("INSERT INTO kelas (name) VALUES (?)")->execute([$class]);
+                    $kelas_ada[$class] = true;
+                }
+
+                // Buat akun login: username & password default = NISN
+                // (password_hash dijalankan DI DALAM transaksi besar — bukan commit per baris.
+                //  cost 8 agar import masal jauh lebih cepat; password_verify tetap bekerja.)
+                $hashed_password = password_hash($nisn, PASSWORD_BCRYPT, ['cost' => 8]);
+                $stmt_user = $pdo->prepare("INSERT INTO users (username, password, role) VALUES (?, ?, 'student')");
+                $stmt_user->execute([$nisn, $hashed_password]);
+                $user_id = $pdo->lastInsertId();
+
+                // Generate Token QR Code Unik
+                $random_string = bin2hex(random_bytes(16));
+                $qr_token = $random_string . '_' . $nisn;
+
+                $stmt_student = $pdo->prepare("INSERT INTO students (user_id, nis, nisn, name, tempat_lahir, tanggal_lahir, jenis_kelamin, alamat, foto, class, qr_token) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+                $stmt_student->execute([$user_id, $nisn, $nisn, $name, $tempat_lahir, $tgl_lahir_db, $jenis_kelamin, $alamat, $foto, $class, $qr_token]);
+
+                $berhasil++;
+            } catch (Exception $e) {
+                $gagal++;
+                $row_errors[] = "Baris $baris: $nisn — " . $e->getMessage();
+            }
+        }
+
+        // Satu commit untuk seluruh batch. Baris yang "dilewati" (duplikat/kolom
+        // tidak lengkap) sudah di-skip sebelum insert & dicatat di $row_errors,
+        // jadi transaksi tetap konsisten. Jika ada error DB nyata, rollback.
+        try {
+            if ($pdo->inTransaction()) $pdo->commit();
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            $gagal += $berhasil;
+            $berhasil = 0;
+            $row_errors[] = "Transaksi dibatalkan: " . $e->getMessage();
+        }
+
+        // Bersihkan folder ekstraksi ZIP
+        if ($tmp_dir) {
+            $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($tmp_dir, FilesystemIterator::SKIP_DOTS), RecursiveIteratorIterator::CHILD_FIRST);
+            foreach ($it as $f) {
+                $f->isDir() ? @rmdir($f->getPathname()) : @unlink($f->getPathname());
+            }
+            @rmdir($tmp_dir);
+        }
+
+        $import_success = "Import selesai! <strong>$berhasil siswa</strong> berhasil ditambahkan.";
+        if ($duplikat > 0) {
+            $import_success .= " <strong>$duplikat</strong> dilewati karena NISN duplikat.";
+        }
+        if ($gagal > 0) {
+            $import_success .= " <strong>$gagal</strong> baris gagal diproses.";
+        }
+        if ($drive_skipped > 0) {
+            $import_success .= " <strong>$drive_skipped</strong> foto Drive dilewati karena anggaran waktu unduh habis — lengkapi lewat menu Edit.";
+        }
+        $import_errors = $row_errors;
     }
 }
+
 
 // ============ PROSES TAMBAH SISWA SATU PER SATU ============
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_FILES['file_csv'])) {
@@ -420,13 +832,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_FILES['file_csv'])) {
                     <li><a href="scan?type=pulang"><i class="fa-solid fa-right-from-bracket"></i> <span>Absen Pulang</span></a></li>
                     <li><a href="scan?type=sholat"><i class="fa-solid fa-mosque"></i> <span>Absen Sholat</span></a></li>
                     <li><a href="waktu_absensi"><i class="fa-solid fa-clock"></i> <span>Waktu Absensi</span></a></li>
+                    <li><a href="hapus_data"><i class="fa-solid fa-broom"></i> <span>Bersihkan Data</span></a></li>
                 </ul>
             </li>
             <li><a href="data_siswa"><i class="fa-solid fa-users"></i> <span>Data Siswa</span></a></li>
             <li><a href="kelas"><i class="fa-solid fa-school"></i> <span>Kelas</span></a></li>
             <li><a href="cetak_kartu"><i class="fa-solid fa-id-card"></i> <span>Cetak Kartu Pelajar</span></a></li>
             <li><a href="tambah_guru"><i class="fa-solid fa-user-plus"></i> <span>Tambah Guru</span></a></li>
-            <li><a href="scan"><i class="fa-solid fa-camera"></i> <span>Scan QR Code</span></a></li>
             <li><a href="input_absen"><i class="fa-solid fa-clipboard-user"></i> <span>Input Manual</span></a></li>
             <li><a href="laporan"><i class="fa-solid fa-file-lines"></i> <span>Laporan Absensi</span></a></li>
         </ul>
@@ -521,7 +933,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_FILES['file_csv'])) {
             <!-- Panel: Import Siswa Masal -->
             <div class="form-panel">
                 <h3><i class="fa-solid fa-file-import"></i> Import Siswa Masal</h3>
-                <p class="subtitle">Upload file CSV dengan format <strong>NISN, Nama, Kelas, Tempat Lahir, Tanggal Lahir, Jenis Kelamin (L/P), Alamat</strong>. Kolom ke-4 sampai ke-7 bersifat opsional. Setiap siswa otomatis mendapat akun login (username &amp; password = NISN) dan QR Code.</p>
+                <p class="subtitle">Tiga cara import: (<strong>A</strong>) file <strong>ZIP</strong> (data + folder foto), (<strong>B</strong>) upload <strong>Excel/CSV</strong> + pilih foto sekaligus, atau (<strong>C</strong>) Excel/CSV dengan <strong>link foto Google Drive</strong> di kolom Foto. Format kolom: <strong>NISN, Nama, Kelas</strong> (Tempat Lahir, Tanggal Lahir, Jenis Kelamin, Alamat, Foto = link Drive opsional). Setiap siswa otomatis mendapat akun login &amp; QR Code.</p>
                 
                 <?php if(!empty($import_success)): ?>
                     <?php $is_error = in_array('error', $import_errors); ?>
@@ -540,13 +952,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_FILES['file_csv'])) {
                     </div>
                 <?php endif; ?>
 
-                <form method="POST" action="" enctype="multipart/form-data">
-                    <label class="file-zone" for="file_csv">
-                        <i class="fa-solid fa-cloud-arrow-up"></i>
-                        <p><strong>Klik untuk memilih file CSV</strong><br>atau seret &amp; letakkan di sini</p>
-                        <div class="file-name" id="file_name"></div>
-                        <input type="file" id="file_csv" name="file_csv" accept=".csv,.txt" required>
-                    </label>
+                <form method="POST" action="" enctype="multipart/form-data" id="importForm">
+                    <div class="form-group">
+                        <label for="file_zip">Metode A — Upload ZIP (CSV + folder foto)</label>
+                        <label class="file-zone" for="file_zip">
+                            <i class="fa-solid fa-file-zipper"></i>
+                            <p><strong>Pilih file ZIP</strong><br>berisi data.csv + folder foto/</p>
+                            <div class="file-name" id="file_zip_name"></div>
+                            <input type="file" id="file_zip" name="file_zip" accept=".zip">
+                        </label>
+                    </div>
+
+                    <div style="text-align:center; margin: 6px 0 18px; color: var(--gray); font-size: 13px; font-weight: 700;">— ATAU —</div>
+
+                    <div class="form-group">
+                        <label for="file_csv">Metode B/C — Upload Excel atau CSV</label>
+                        <label class="file-zone" for="file_csv">
+                            <i class="fa-solid fa-file-excel"></i>
+                            <p><strong>Pilih file Excel (.xlsx) atau CSV</strong><br>NISN, Nama, Kelas, ... (kolom Foto = link Google Drive)</p>
+                            <div class="file-name" id="file_csv_name"></div>
+                            <input type="file" id="file_csv" name="file_csv" accept=".xlsx,.csv,.txt">
+                        </label>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="file_fotos">Foto Siswa (opsional, bisa pilih banyak)</label>
+                        <label class="file-zone" for="file_fotos">
+                            <i class="fa-solid fa-images"></i>
+                            <p><strong>Pilih foto</strong><br>nama file sesuai NISN (mis. 0123456789.jpg) — bisa banyak sekaligus</p>
+                            <div class="file-name" id="file_fotos_name"></div>
+                            <input type="file" id="file_fotos" name="file_fotos[]" accept=".jpg,.jpeg,.png,.webp" multiple>
+                        </label>
+                    </div>
                     
                     <button type="submit" class="btn-save" id="btn_import">
                         <i class="fa-solid fa-file-import"></i> Import Data Siswa
@@ -559,10 +996,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_FILES['file_csv'])) {
                     <div class="info-box">
                         <i class="fa-solid fa-circle-info"></i>
                         <div>
-                            <strong>Format file CSV:</strong><br>
-                            NISN, Nama, Kelas, Tempat Lahir, Tanggal Lahir, Jenis Kelamin, Alamat<br>
-                            <span style="font-family: monospace;">0123456789,Budi Santoso,XII IPS 1,Bangunrejo,2009-05-12,L,Desa Bangunrejo</span><br>
-                            Koma (<strong>,</strong>) atau titik-koma (<strong>;</strong>) keduanya didukung. Baris pertama (header) otomatis dilewati. Kolom opsional boleh dikosongkan. Kelas yang belum terdaftar di menu <strong>Kelas</strong> akan otomatis didaftarkan.
+                            <strong>Format kolom (Excel / CSV):</strong> <span style="font-family:monospace;">NISN, Nama, Kelas, Tempat Lahir, Tanggal Lahir, Jenis Kelamin, Alamat, Foto</span><br>
+                            <strong>Kolom Foto</strong> (opsional) = link Google Drive, mis. <span style="font-family:monospace;">https://drive.google.com/file/d/FILE_ID/view</span> — file harus di-share <strong>"Siapa saja dengan link"</strong> agar sistem bisa mengunduhnya.<br><br>
+                            <strong>Metode B</strong> (termudah): pilih Excel/CSV lalu pilih semua foto sekaligus (Ctrl+A/serat), foto bernama sesuai NISN dicocokkan otomatis. <strong>Metode C</strong>: cukup taruh link Drive di kolom Foto.<br>
+                            <strong>Metode A (ZIP):</strong> <span style="font-family:monospace;">data.csv<br>foto/0123456789.jpg</span><br>
+                            Koma (<strong>,</strong>/<strong>;</strong>) didukung; data dicari di mana saja dalam ZIP. Kelas belum terdaftar didaftarkan otomatis. Siswa tanpa foto tetap terimport.
                         </div>
                     </div>
                 </form>
@@ -581,16 +1019,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_FILES['file_csv'])) {
         function toggleSubmenu(el) {
             el.closest('.has-submenu').classList.toggle('open');
         }
-        document.getElementById('file_csv').addEventListener('change', function() {
-            var label = document.getElementById('file_name');
-            label.textContent = this.files.length > 0 ? this.files[0].name : '';
-        });
-        document.getElementById('btn_import').addEventListener('click', function(e) {
-            var input = document.getElementById('file_csv');
-            if (!input.files.length) {
+        function bindFileLabel(inputId, labelId) {
+            var input = document.getElementById(inputId);
+            if (!input) return;
+            input.addEventListener('change', function() {
+                var label = document.getElementById(labelId);
+                if (label) label.textContent = this.files.length > 1 ? this.files.length + ' file dipilih' : (this.files.length > 0 ? this.files[0].name : '');
+            });
+        }
+        bindFileLabel('file_zip', 'file_zip_name');
+        bindFileLabel('file_csv', 'file_csv_name');
+        bindFileLabel('file_fotos', 'file_fotos_name');
+
+        // Validasi & indikator proses dipasang di event SUBMIT form — bukan click tombol.
+        // (Men-disable tombol submit di event click membuat Chrome/Edge MEMBATALKAN
+        //  pengiriman form secara diam-diam, sehingga import tidak pernah terkirim.)
+        document.getElementById('importForm').addEventListener('submit', function(e) {
+            var zip = document.getElementById('file_zip');
+            var csv = document.getElementById('file_csv');
+            if (!zip.files.length && !csv.files.length) {
                 e.preventDefault();
-                alert('Silakan pilih file CSV terlebih dahulu.');
+                alert('Silakan pilih file ZIP atau CSV terlebih dahulu.');
+                return;
             }
+            var btn = document.getElementById('btn_import');
+            btn.disabled = true;
+            btn.style.opacity = '0.7';
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Sedang mengimpor... mohon tunggu';
         });
     </script>
 
