@@ -8,6 +8,8 @@ assets/foto_siswa/
 
 # Log
 *.log
+# Log error lib QR lokal (phpqrcode menulis <file>-errors.txt di lib/)
+lib/*-errors.txt
 
 # Cache & binary test
 tests/.phpunit.cache/
