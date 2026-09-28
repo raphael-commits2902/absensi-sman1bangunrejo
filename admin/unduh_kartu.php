@@ -55,6 +55,31 @@ class PDF_Kartu extends FPDF
         $this->_out($op);
     }
 
+    // Poligon bebas (FPDF core tidak punya) — raw PDF path operator,
+    // $points = array berisi pasangan [x, y] dalam mm (koordinat atas-kiri).
+    function poly($points, $style = 'F')
+    {
+        $k = $this->k;
+        $hp = $this->h;
+        $op = '';
+        $first = true;
+        foreach ($points as $p) {
+            $px = $p[0] * $k;
+            $py = ($hp - $p[1]) * $k;
+            $op .= $first ? sprintf('%.2F %.2F m ', $px, $py) : sprintf('%.2F %.2F l ', $px, $py);
+            $first = false;
+        }
+        $op .= 'h ';
+        if ($style === 'F') {
+            $op .= 'f';
+        } elseif ($style === 'DF') {
+            $op .= 'B';
+        } else {
+            $op .= 'S';
+        }
+        $this->_out($op);
+    }
+
     function SetAlpha($alpha, $bm = 'Normal')
     {
         $gs = $this->AddExtGState(array('ca' => $alpha, 'CA' => $alpha, 'BM' => '/' . $bm));
@@ -194,8 +219,8 @@ function render_icon($codepoint, $size, $rgb)
     $w = $bbox[2] - $bbox[0];
     $h = $bbox[1] - $bbox[7];
     if ($w > 0 && $h > 0) {
-        $sx = ($canvas - $w) / 2 - $bbox[0];
-        $sy = ($canvas - $h) / 2 - $bbox[7];
+        $sx = (int)round(($canvas - $w) / 2 - $bbox[0]);
+        $sy = (int)round(($canvas - $h) / 2 - $bbox[7]);
         imagefilledrectangle($img, 0, 0, $canvas - 1, $canvas - 1, $trans);
         imagettftext($img, $canvas * 0.8, 0, $sx, $sy, $color, $font, $glyph);
     }
@@ -228,6 +253,104 @@ function dashed_line($pdf, $x1, $y, $x2, $lw, $gap, $cr = null, $cg = null, $cb 
         $pdf->Line($x, $y, $end, $y);
         $x = $end + $gap;
     }
+}
+// Normalisasi spasi teks.
+// PENTING 1: jangan pakai modifier /u di sini. String yang sudah diberi elipsis
+// CP1252 (chr(133)) BUKAN UTF-8 valid, sehingga preg_* dengan /u mengembalikan
+// NULL → trim(NULL) = '' → seluruh baris hilang dari kartu.
+// PENTING 2: jangan pakai \v (dan \s) di kelas karakter: di PCRE, \v cocok dengan
+// SEMUA vertical whitespace termasuk 0x85 (NEL) = karakter elipsis kita, sehingga
+// elipsis ikut terhapus. Pakai escape hex eksplisit.
+function norm_spasi($txt)
+{
+    return trim(preg_replace('/[ \t\n\x0B\x0C\r]+/', ' ', (string)$txt));
+}
+
+// Potong teks SATU BARIS berdasarkan LEBAR NYATA (mm) pada font aktif,
+// tambahkan elipsis (…) bila terpotong. Dipakai agar teks panjang tidak
+// pernah meluber ke dalam gambar QR / tanda tangan kepala sekolah.
+function clip_text($pdf, $txt, $maxW)
+{
+    $txt = norm_spasi($txt);
+    if ($txt === '') {
+        return '';
+    }
+    if ($pdf->GetStringWidth($txt) <= $maxW) {
+        return $txt;
+    }
+    $ell = chr(133); // '…' (aman di CP1252 font inti Helvetica)
+    // Hindari ellipsis ganda bila baris sudah berelipsis lalu dipotong lagi
+    $txt = rtrim($txt, $ell);
+    $n = mb_strlen($txt);
+    while ($n > 0) {
+        $n--;
+        $cand = rtrim(mb_substr($txt, 0, $n)) . $ell;
+        if ($pdf->GetStringWidth($cand) <= $maxW) {
+            return $cand;
+        }
+    }
+    return $ell;
+}
+
+// Wrap teks menjadi MAKSIMAL $maxLines baris (lebar $maxW per baris),
+// elipsis di akhir baris terakhir bila masih ada sisa teks.
+// Dipakai untuk ALAMAT supaya tidak menembus ke bawah ke gambar ttd.
+function wrap_clip_text($pdf, $txt, $maxW, $maxLines)
+{
+    $txt = norm_spasi($txt);
+    $maxLines = max(1, (int)$maxLines);
+    if ($txt === '') {
+        return '';
+    }
+    // FPDF menghitung lebar teks yang tersedia sebagai $maxW - 2*cMargin
+    // (interior cell margin, lihat FPDF::MultiCell). Batas di sini WAJIB
+    // memakai rumus yang sama; kalau tidak, MultiCell akan memecah baris
+    // sekali lagi dengan sendirinya sehingga baris berikutnya tertimpa
+    // (contoh nyata: angka tahun "2008" menimpa nilai JK).
+    $wmax = $maxW - 2 * (function () { return $this->cMargin; })->call($pdf);
+    if ($wmax <= 0) {
+        $wmax = $maxW; // jaga-jaga bila cMargin tidak wajar
+    }
+    if ($pdf->GetStringWidth($txt) <= $wmax) {
+        return $txt; // muat satu baris
+    }
+    $words = preg_split('/[ \t\n\x0B\x0C\r]+/', $txt);
+    if (!is_array($words) || empty($words)) {
+        return clip_text($pdf, $txt, $wmax);
+    }
+
+    $lines = array();
+    $cur = '';
+    $sisa = false; // true bila masih ada kata yang tidak muat di baris terakhir
+    foreach ($words as $w) {
+        $test = ($cur === '') ? $w : $cur . ' ' . $w;
+        if ($cur === '' || $pdf->GetStringWidth($test) <= $wmax) {
+            $cur = $test;
+            continue;
+        }
+        // Baris sekarang sudah penuh: buka baris baru bila masih ada jatah,
+        // kalau tidak, sisa teks akan ditandai elipsis.
+        if (count($lines) + 1 >= $maxLines) {
+            $sisa = true;
+            break;
+        }
+        $lines[] = $cur;
+        $cur = $w;
+    }
+    if ($cur !== '') {
+        $lines[] = $cur;
+    }
+    if (empty($lines)) {
+        $lines[] = '';
+    }
+    if ($sisa) {
+        $last = array_pop($lines);
+        $lines[] = clip_text($pdf, rtrim($last) . chr(133), $wmax); // teks dipastikan terpotong
+    }
+    foreach ($lines as $i => $ln) {
+        $lines[$i] = clip_text($pdf, $ln, $wmax); // jaga-jaga kata tunggal super panjang
+    }
+    return implode("\n", $lines);
 }
 
 // ==================== GAMBAR STATIS (logo & ikon) ====================
@@ -275,17 +398,37 @@ $logo_in = 8.2;  // logo di dalam badge
 $logo_pad = 0.53;
 $photo_w = 13.19; // foto
 $photo_h = 16.4;
-$qr_size = 15.0; // QR (diperbesar lagi; bottom y+37.09, gap 0.31mm di atas tinta ttd y+37.4)
+$qr_size = 15.0; // QR (top y+21.03, bottom y+36.03 → jarak 0.47mm ke tinta ttd yang mulai y+36.5)
 $pad = 2.85;
 
-foreach ($students as $idx => $s) {
-    // 8 kartu per halaman (2 kolom x 4 baris)
-    $slot = $idx % 8;
-    if ($idx > 0 && $slot === 0) {
-        $pdf->AddPage();
+// Struktur halaman: berpasangan depan-belakang per 8 kartu (2 kolom x 4 baris)
+// sehingga halaman ganjil = depan, halaman genap = belakang.
+$perPage = 8;
+
+// Ukuran halaman A4 (mm) + mode posisi halaman belakang:
+//  - 'none'  : posisi kartu belakang SAMA PERSIS dengan halaman depan
+//              (bawaan; halaman depan & belakang sejajar saat PDF dibuka
+//              maupun dicetak satuan)
+//  - 'long'  : dicerminkan pada sumbu vertikal = "flip on long edge"
+//              (kertas dibalik seperti buku — untuk cetak bolak-balik/duplex)
+//  - 'short' : dicerminkan pada sumbu horizontal = "flip on short edge"
+//              (untuk printer yang membalik kertas pada sumbu mendatar)
+$PAGE_W = 210.0;
+$PAGE_H = 297.0;
+$duplex = 'none';
+
+$totalStudents = count($students);
+for ($chunkStart = 0; $chunkStart < $totalStudents; $chunkStart += $perPage) {
+    $chunk = array_slice($students, $chunkStart, $perPage);
+
+    // ---- Halaman DEPAN: 8 kartu ----
+    if ($chunkStart > 0) {
+        $pdf->AddPage(); // halaman pertama sudah dibuat sebelum loop
     }
-    $x = 12 + ($slot % 2) * 95.6;
-    $y = 8 + intval($slot / 2) * 70;
+    foreach ($chunk as $k => $s) {
+        $slot = $k; // posisi slot 0..7 (sama dengan halaman belakangnya)
+        $x = 12 + ($slot % 2) * 95.6;
+        $y = 8 + intval($slot / 2) * 70;
 
     // (bingkai digambar TERAKHIR di akhir loop agar tidak tertimpa rect kop/band/footer)
 
@@ -386,10 +529,12 @@ foreach ($students as $idx => $s) {
     $infoX = $x + $pad + $photo_w + 2.49;
     $nameY = $y + $bodyTop + $pad;
     $valMaxW = $x + $CW - $pad - $qr_size - $pad - $infoX; // sampai sebelum QR (kanan)
+    // Nama: dipotong berdasarkan lebar nyata, berhenti sebelum zona gambar QR
+    $nameMaxW = ($x + $CW - $pad - $qr_size - 1.2) - $infoX;
     $pdf->SetTextColor($cDark[0], $cDark[1], $cDark[2]);
     $pdf->SetFont('Helvetica', 'B', 8.5);
     $pdf->SetXY($infoX, $nameY);
-    $pdf->Cell($valMaxW, 3.79, mb_substr($s['name'], 0, 24), 0, 0, 'L');
+    $pdf->Cell($valMaxW, 3.79, clip_text($pdf, $s['name'], $nameMaxW), 0, 0, 'L');
 
     // ---- Detail: NISN / TTL / JK / ALAMAT (sama persis preview) ----
     $ttl_txt = trim($s['tempat_lahir']);
@@ -413,6 +558,10 @@ foreach ($students as $idx => $s) {
     // Lebar nilai dibatasi berhenti sebelum zona tanda tangan (ttd mulai x+61.37),
     // supaya alamat panjang wrap ke bawah, bukan menimpa tanda tangan.
     $valMaxRow = ($x + 60.2) - $valX;
+    // Catatan: batas di atas adalah lebar LAYOUT (sama dengan lebar kolom nilai di
+    // preview HTML). Koreksi margin internal MultiCell (2*cMargin ≈ 2mm) sudah
+    // ditangani di dalam wrap_clip_text(), jadi JANGAN dikurangi lagi di sini —
+    // pengurangan ganda membuat PDF wrap lebih awal daripada preview.
 
     $rowY = $nameY + 4.68;
     foreach ($rows as $r) {
@@ -427,30 +576,36 @@ foreach ($students as $idx => $s) {
         $pdf->Cell($colonX - $lblX, 2.0, $r[1]);
         $pdf->SetXY($colonX, $rowY);
         $pdf->Cell(1.07, 2.0, ':');
-        // Nilai
+        // Nilai — wrap berdasarkan LEBAR NYATA (mm) pada zona aman masing-masing
+        // baris, sehingga teks panjang tidak pernah meluber ke dalam gambar:
+        //  - NISN/TTL/JK sejajar gambar QR  -> berhenti sebelum tepi kiri QR
+        //  - ALAMAT berada segaris gambar ttd -> berhenti sebelum tepi kiri ttd
         $pdf->SetTextColor(0, 0, 0);
         $pdf->SetFont('Helvetica', '', 6);
+        $pdf->SetXY($valX, $rowY);
         if ($r[0] === 'alamat') {
-            $pdf->SetXY($valX, $rowY);
-            $pdf->MultiCell($valMaxRow, 2.0, $r[2]);
+            $txt = wrap_clip_text($pdf, $r[2], $valMaxRow, 3);
+            $pdf->MultiCell($valMaxRow, 2.0, $txt, 0, 'L'); // rata kiri: 'J' bawaan FPDF bikin jarak antar kata melebar
         } else {
-            $pdf->SetXY($valX, $rowY);
-            // Clip di lebar kolom (… bila kepanjangan), tidak menimpa QR/ttd
-            $valClip = mb_substr($r[2], 0, 37);
-            if (mb_strlen($r[2]) > 37) {
-                $valClip = rtrim(mb_substr($r[2], 0, 34)) . chr(133);
-            }
-            $pdf->Cell($valMaxRow, 2.0, $valClip);
+            $wRow = ($x + $CW - $pad - $qr_size - 0.5) - $valX; // tepat sebelum tepi kiri QR
+            $txt = wrap_clip_text($pdf, $r[2], $wRow, 2);
+            $pdf->MultiCell($wRow, 2.0, $txt, 0, 'L');
         }
-        $rowY += 2.89;
+        // Tinggi baris dinamis (meniru alur flex HTML): baris yang wrap ke 2 baris
+        // mendorong baris berikutnya turun, jadi teks tidak pernah saling menimpa.
+        $rowY += (substr_count($txt, "\n") + 1) * 2.0 + 0.89;
     }
 
     // ---- QR Code (kanan, sejajar foto) ----
+    // Digeser ke atas sedikit (1.06mm ≈ 4px), sinkron dengan margin-top:-4px pada .card-qr di preview HTML
+    $qr_up = 1.06;
     $qrx = $x + $CW - $pad - $qr_size;
-    $qry = $y + $bodyTop + $pad;
+    $qry = $y + $bodyTop + $pad - $qr_up;
     $qr_jpeg = null;
     $qr_tmp = tempnam(sys_get_temp_dir(), 'qr') . '.png';
-    if (absensi_qr_png($s['nisn'], $qr_tmp, 8, 2)) {
+    // NISN kosong dilewati: QRcode::png('') gagal ("empty string") dan menulis
+    // log ke lib/ — lebih baik kotak QR dibiarkan kosong tanpa sampah file log.
+    if (trim((string)$s['nisn']) !== '' && absensi_qr_png($s['nisn'], $qr_tmp, 8, 2)) {
         $qr_jpeg = to_jpeg($qr_tmp, 200, 200);
         @unlink($qr_tmp);
     }
@@ -500,7 +655,154 @@ foreach ($students as $idx => $s) {
     // Bersihkan file sementara foto/QR
     if (!empty($foto_jpeg)) @unlink($foto_jpeg);
     if (!empty($qr_jpeg)) @unlink($qr_jpeg);
-}
+
+    } // akhir foreach kartu depan
+
+    // ==================== SISI BELAKANG KARTU PELAJAR ====================
+    // Halaman belakang untuk 8 kartu pada chunk ini. Seluruh desain (banner
+    // biru, badan putih + tint biru, band biru, bingkai biru) digambar penuh
+    // dengan perintah vektor FPDF — tidak perlu gambar background pre-render.
+    // Posisi slot kartu sisi belakang = SAMA PERSIS dengan halaman depan
+    // (x = 12 + kolom*95.6, y = 8 + baris*70) sesuai request, sehingga setiap
+    // kartu belakang sejajar tepat dengan kartu depannya saat PDF dibuka
+    // maupun dicetak. Bila dibutuhkan cetak bolak-balik (duplex), set $duplex
+    // di atas ke 'long'/'short' — posisi akan dicerminkan mengikuti mode itu.
+    // Isi: logo SMAN 1 Bangunrejo paling atas di tengah, teks pengantar
+    // pengembalian di bawahnya, lalu kode QR besar di bagian bawah tengah.
+    // Semua posisi dihitung agar tidak saling menumpuk satu sama lain.
+    $pdf->AddPage();
+    foreach ($chunk as $k => $s) {
+        $slot = $k;
+        $x = 12 + ($slot % 2) * 95.6;
+        $y = 8 + intval($slot / 2) * 70;
+        // Cerminkan posisi kartu hanya bila mode duplex aktif (lihat $duplex di atas)
+        if ($duplex === 'long') {
+            $x = $PAGE_W - $x - $CW;   // cermin sumbu vertikal (flip on long edge)
+        } elseif ($duplex === 'short') {
+            $y = $PAGE_H - $y - $CH;   // cermin sumbu horizontal (flip on short edge)
+        }
+
+        // ---- BATAS DALAM KARTU: semua elemen sisi belakang WAJIB berada
+        // di dalam rect kartu (x, y, CW, CH) dengan padding 1mm dari tepi,
+        // sehingga tidak ada yang melewati/menimpa kartu pelajar lain. ----
+        $bk_pad = 1.0;                                   // padding dari tepi kartu (mm)
+        $bk_innerL = $x + $bk_pad;                       // batas kiri dalam
+        $bk_innerR = $x + $CW - $bk_pad;                 // batas kanan dalam
+
+        // ====== DESAIN SISI BELAKANG ala KMI Al-Azhar (referensi belakng.jpg):
+        // kartu putih, banner biru judul di atas, teks pengantar, QR besar
+        // dengan NISN di bawahnya, dan band biru informasi di bagian bawah. ======
+        $bk_blue = array(30, 107, 184);                  // biru tema (dari referensi)
+        $bk_ink  = array(15, 23, 42);                    // hampir hitam untuk teks isi
+
+        // --- Basis kartu PUTIH + tint biru TRANSPARAN (kesan warna lembut) ---
+        $pdf->SetFillColor(255, 255, 255);
+        $pdf->Rect($x, $y, $CW, $CH, 'F');
+        $pdf->SetAlpha(0.07);                            // overlay biru ~7% (agak transparan)
+        $pdf->SetFillColor($bk_blue[0], $bk_blue[1], $bk_blue[2]);
+        $pdf->Rect($x, $y, $CW, $CH, 'F');
+        $pdf->SetAlpha(1);
+
+        // --- Banner biru gaya GAMING: tepi kanan miring (bevel) + slash aksen ---
+        $bk_hH = 9.0;                                    // tinggi banner (mm)
+        $bk_cut = 5.5;                                   // kedalaman potongan miring (mm)
+        $pdf->SetFillColor($bk_blue[0], $bk_blue[1], $bk_blue[2]);
+        $pdf->poly(array(
+            array($x, $y),
+            array($x + $CW - $bk_cut, $y),
+            array($x + $CW, $y + $bk_hH),
+            array($x, $y + $bk_hH)
+        ), 'F');
+        // slash aksen miring paralel dengan tepi potong (biru muda)
+        $pdf->SetFillColor(79, 195, 247);                // #4FC3F7
+        $pdf->poly(array(
+            array($x + $CW - 8.0, $y),
+            array($x + $CW - 6.5, $y),
+            array($x + $CW - 2.5, $y + $bk_hH),
+            array($x + $CW - 4.0, $y + $bk_hH)
+        ), 'F');
+        // slash tipis kedua (lebih terang, layered, tetap di dalam banner)
+        $pdf->SetFillColor(144, 202, 249);               // #90CAF9
+        $pdf->poly(array(
+            array($x + $CW - 6.2, $y),
+            array($x + $CW - 5.6, $y),
+            array($x + $CW - 0.1, $y + $bk_hH),
+            array($x + $CW - 0.7, $y + $bk_hH)
+        ), 'F');
+        // Logo SMAN 1 di TENGAH banner (tanpa kotak latar / background)
+        if ($logo_sman1) {
+            $pdf->Image($logo_sman1, $x + $CW / 2 - 3.5, $y + 1.0, 7.0, 7.0);
+        }
+
+        // --- Teks pengantar ASLI (satu paragraf, TANPA nomor, rata tengah) ---
+        $bk_msg = 'Barang siapa yang menemukan kartu pelajar ini diharapkan dapat '
+                . 'mengembalikan kepada pemiliknya atau menyerahkan ke SMAN 1 Bangunrejo '
+                . 'pada alamat berikut: Jalan Raya Sidorejo, Kec. Bangunrejo, Lampung Tengah.';
+        $bk_itemY = $y + 9.8;                            // di bawah banner 9mm
+        $bk_lh = 2.2;                                    // tinggi baris (mm)
+        $bk_qr_top = $y + 16.5;                          // batas bawah teks = sisi atas QR
+        $pdf->SetTextColor($bk_ink[0], $bk_ink[1], $bk_ink[2]);
+        $pdf->SetFont('Helvetica', '', 6.5);
+        $bk_lines = explode("\n", wrap_clip_text($pdf, $bk_msg, $CW - 4.0, 4));
+        foreach ($bk_lines as $bk_ln) {
+            if ($bk_itemY + $bk_lh > $bk_qr_top + 0.01) {
+                break;                                   // jangan pernah masuk zona QR
+            }
+            $pdf->SetXY($x, $bk_itemY);
+            $pdf->Cell($CW, $bk_lh, $bk_ln, 0, 0, 'C');
+            $bk_itemY += $bk_lh;
+        }
+
+        // --- QR besar (tanpa plat/oval putih tambahan: gambar QR dari lib
+        //     lokal sudah membawa quiet zone putihnya sendiri) ---
+        $bk_qr_size = 24.0;                              // QR 24mm
+        $bk_qr_x = max($bk_innerL, min($x + $CW / 2 - $bk_qr_size / 2, $bk_innerR - $bk_qr_size));
+        $bk_qr_y = $y + 17.4;                            // QR: y+17.4 s.d. y+41.4
+        // Gambar QR (berisi NISN, sama dengan QR sisi depan)
+        $bk_qr_tmp = tempnam(sys_get_temp_dir(), 'bqr') . '.png';
+        $bk_qr_jpeg = null;
+        if (trim((string)$s['nisn']) !== '' && absensi_qr_png($s['nisn'], $bk_qr_tmp, 10, 3)) {
+            $bk_qr_jpeg = to_jpeg($bk_qr_tmp, 300, 300);
+            if ($bk_qr_jpeg) {
+                $pdf->Image($bk_qr_jpeg, $bk_qr_x, $bk_qr_y, $bk_qr_size, $bk_qr_size);
+            }
+        }
+        if (!empty($bk_qr_jpeg)) @unlink($bk_qr_jpeg);
+        @unlink($bk_qr_tmp);
+        // Angka NISN di bawah QR (biru tua tebal, menyatu dengan tema)
+        $pdf->SetTextColor($bk_blue[0], $bk_blue[1], $bk_blue[2]);
+        $pdf->SetFont('Helvetica', 'B', 8.5);
+        $pdf->SetXY($x, $y + 41.9);
+        $pdf->Cell($CW, 2.3, !empty($s['nisn']) ? $s['nisn'] : '-', 0, 0, 'C');
+
+        // --- Band biru bawah gaya GAMING: tepi kanan miring + slash aksen ---
+        $pdf->SetFillColor($bk_blue[0], $bk_blue[1], $bk_blue[2]);
+        $pdf->poly(array(
+            array($x, $y + 45.5),
+            array($x + $CW, $y + 45.5),
+            array($x + $CW - $bk_cut, $y + $CH),
+            array($x, $y + $CH)
+        ), 'F');
+        // slash tipis biru muda paralel dengan potongan kanan band
+        $pdf->SetFillColor(79, 195, 247);
+        $pdf->poly(array(
+            array($x, $y + 46.9),
+            array($x + $CW - 0.91, $y + 46.9),
+            array($x + $CW - 1.43, $y + 47.7),
+            array($x, $y + 47.7)
+        ), 'F');
+        // Teks berlaku (putih) di tengah band (logo hanya di banner atas)
+        $pdf->SetTextColor(255, 255, 255);
+        $pdf->SetFont('Helvetica', 'B', 6);
+        $pdf->SetXY($x, $y + 48.4);
+        $pdf->Cell($CW, 3.0, 'BERLAKU SELAMA MENJADI PELAJAR SMAN 1 BANGUNREJO', 0, 0, 'C');
+
+        // --- Bingkai BIRU kartu belakang (digambar terakhir agar tidak tertimpa) ---
+        $pdf->SetLineWidth(0.5);
+        $pdf->SetDrawColor($bk_blue[0], $bk_blue[1], $bk_blue[2]);
+        $pdf->Rect($x, $y, $CW, $CH);
+    } // akhir foreach kartu belakang
+} // akhir for chunk (halaman depan + belakang)
 
 if ($logo_lampung) @unlink($logo_lampung);
 if ($logo_sman1) @unlink($logo_sman1);

@@ -87,7 +87,7 @@ if (!empty($filter_class)) {
         .id-card .card-info .detail.detail-wrap i { position: absolute; left: 0; top: 1px; }
         .id-card .card-info .detail.detail-wrap .lbl { position: absolute; left: 14px; top: 0; }
         .id-card .card-info .detail.detail-wrap .val { display: inline; }
-        .id-card .card-qr { display: flex; flex-direction: column; align-items: center; gap: 2px; flex-shrink: 0; }
+        .id-card .card-qr { display: flex; flex-direction: column; align-items: center; gap: 2px; flex-shrink: 0; margin-top: -4px; /* QR digeser ke atas sedikit (sinkron dengan PDF: 1.06mm) */ }
         .id-card .card-qr img { width: 57px; height: 57px; border: 1px solid #e2e8f0; border-radius: 6px; padding: 2px; background: white; }
         .id-card .card-footer { margin-top: auto; background: #f8fafc; padding: 3px 10px; font-size: 6px; font-weight: 700; color: #94a3b8; letter-spacing: 1px; text-align: center; text-transform: uppercase; position: relative; }
         /* Blok tanda tangan Kepala Sekolah (kanan bawah) — gambar memuat cap + nama + NIP */
