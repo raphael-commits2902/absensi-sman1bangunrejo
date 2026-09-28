@@ -189,7 +189,9 @@ if (!function_exists('absensi_is_terlambat')) {
 
     /**
      * Proses scan absen hadir oleh Guru (satu jenis: hadir).
-     * Mengembalikan array hasil (bukan JSON) agar mudah diuji.
+     * Fleksibel: bila baris kehadiran hari ini sudah ada tetapi jam masuk
+     * masih kosong (mis. siswa baru absen Sholat), jam masuk DIISI — bukan
+     * dianggap sudah absen. Mengembalikan array hasil (bukan JSON) agar mudah diuji.
      * @param PDO         $pdo
      * @param string      $qr_token
      * @param string|null $now        Format 'Y-m-d H:i:s', default waktu server
@@ -217,10 +219,26 @@ if (!function_exists('absensi_is_terlambat')) {
         }
 
         $student_id = $student['id'];
-        $stmt_check = $pdo->prepare("SELECT id FROM attendance WHERE student_id = ? AND date = ?");
+        $stmt_check = $pdo->prepare("SELECT id, time_in, status FROM attendance WHERE student_id = ? AND date = ?");
         $stmt_check->execute([$student_id, $today]);
+        $existing = $stmt_check->fetch();
 
-        if ($stmt_check->rowCount() > 0) {
+        if ($existing) {
+            // Fleksibel: baris kehadiran bisa sudah ada tanpa jam masuk
+            // (mis. siswa baru absen Sholat sebelum absen Hadir) — isi time_in
+            // daripada menolak dengan "sudah absen".
+            if (empty($existing['time_in']) && $existing['status'] === 'Hadir') {
+                $upd = $pdo->prepare("UPDATE attendance SET time_in = ?, time = ? WHERE id = ?");
+                $upd->execute([$current_time, $current_time, $existing['id']]);
+                return [
+                    'status' => 'success',
+                    'name' => $student['name'],
+                    'nisn' => $student['nisn'],
+                    'class' => $student['class'],
+                    'foto' => $student['foto'],
+                    'time' => $current_time
+                ];
+            }
             return [
                 'status' => 'already',
                 'name' => $student['name'],
@@ -246,6 +264,9 @@ if (!function_exists('absensi_is_terlambat')) {
 
     /**
      * Proses scan absen oleh Admin (jenis: hadir/pulang/sholat).
+     * FLEKSIBEL: absen Sholat boleh dilakukan TANPA absen Hadir terlebih
+     * dahulu — bila belum ada baris kehadiran, sistem membuat baris baru
+     * yang hanya mencatat time_sholat (jam masuk menyusul bila scan Hadir).
      * Mengembalikan array hasil (bukan JSON) agar mudah diuji.
      * @param PDO         $pdo
      * @param string      $qr_token
@@ -309,9 +330,14 @@ if (!function_exists('absensi_is_terlambat')) {
             return ['status' => 'success', 'name' => $student['name'], 'nisn' => $student['nisn'], 'class' => $student['class'], 'foto' => $student['foto'], 'jenis' => 'Pulang', 'time' => $time];
         }
 
-        // sholat
+        // sholat — FLEKSIBEL: boleh dilakukan tanpa absen Hadir terlebih dahulu.
         if (!$row) {
-            return ['status' => 'error', 'message' => $student['name'] . ' belum absen Hadir hari ini.'];
+            // Belum ada baris kehadiran hari ini: buat baris baru yang hanya
+            // mencatat time_sholat. time_in mengisi otomatis bila siswa kemudian
+            // scan Hadir (lihat cabang 'hadir' di atas).
+            $insert = $pdo->prepare("INSERT INTO attendance (student_id, date, time, time_sholat, status) VALUES (?, ?, ?, ?, 'Hadir')");
+            $insert->execute([$student_id, $date, $time, $time]);
+            return ['status' => 'success', 'name' => $student['name'], 'nisn' => $student['nisn'], 'class' => $student['class'], 'foto' => $student['foto'], 'jenis' => 'Sholat', 'time' => $time];
         }
         if (!empty($row['time_sholat'])) {
             return ['status' => 'error', 'message' => $student['name'] . ' sudah absen Sholat hari ini.'];

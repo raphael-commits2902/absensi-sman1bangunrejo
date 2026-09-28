@@ -47,4 +47,17 @@ class ScanGuruTest extends BaseTestCase
         $this->assertSame('XII IPS 1', $r['class']);
         $this->assertArrayHasKey('foto', $r);
     }
+
+    public function testScanHadirSetelahSholatFleksibel(): void
+    {
+        // Fleksibel: baris kehadiran sudah ada karena siswa absen Sholat dulu,
+        // tetapi time_in masih kosong — scan guru mengisi jam masuk,
+        // bukan membalas "sudah absen".
+        absensi_scan_admin($this->pdo, 'STUDENT2', 'sholat', '2026-08-17 12:00:00');
+        $r = absensi_scan_guru($this->pdo, 'STUDENT2', '2026-08-17 13:05:00');
+        $this->assertSame('success', $r['status']);
+        $row = $this->pdo->query("SELECT * FROM attendance WHERE student_id = 2 AND date = '2026-08-17'")->fetch();
+        $this->assertSame('13:05:00', $row['time_in']);
+        $this->assertSame('12:00:00', $row['time_sholat']);
+    }
 }

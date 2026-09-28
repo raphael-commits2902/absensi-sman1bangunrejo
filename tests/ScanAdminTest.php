@@ -36,6 +36,8 @@ class ScanAdminTest extends BaseTestCase
 
     public function testPulangSetelahHadirBerhasil(): void
     {
+        // Urutan aturan: Hadir → Sholat → Pulang (pulang mensyaratkan sholat).
+        absensi_scan_admin($this->pdo, 'STUDENT1', 'sholat', '2026-08-16 12:00:00');
         $r = absensi_scan_admin($this->pdo, 'STUDENT1', 'pulang', '2026-08-16 14:30:00');
         $this->assertSame('success', $r['status']);
         $this->assertSame('Pulang', $r['jenis']);
@@ -45,10 +47,19 @@ class ScanAdminTest extends BaseTestCase
 
     public function testPulangGandaDitolak(): void
     {
+        absensi_scan_admin($this->pdo, 'STUDENT1', 'sholat', '2026-08-16 12:00:00');
         absensi_scan_admin($this->pdo, 'STUDENT1', 'pulang', '2026-08-16 14:30:00');
         $r = absensi_scan_admin($this->pdo, 'STUDENT1', 'pulang', '2026-08-16 15:30:00');
         $this->assertSame('error', $r['status']);
         $this->assertStringContainsString('sudah absen Pulang', $r['message']);
+    }
+
+    public function testPulangSebelumSholatDitolak(): void
+    {
+        // Sudah absen Hadir (baris fixture) tapi belum Sholat → pulang ditolak.
+        $r = absensi_scan_admin($this->pdo, 'STUDENT1', 'pulang', '2026-08-16 14:30:00');
+        $this->assertSame('error', $r['status']);
+        $this->assertStringContainsString('belum absen Sholat', $r['message']);
     }
 
     public function testSholatSetelahHadirBerhasil(): void
@@ -68,11 +79,31 @@ class ScanAdminTest extends BaseTestCase
         $this->assertStringContainsString('sudah absen Sholat', $r['message']);
     }
 
-    public function testSholatSebelumHadirDitolak(): void
+    public function testSholatSebelumHadirTetapDiizinkan(): void
     {
+        // Fleksibel: siswa boleh absen Sholat walau belum absen Hadir —
+        // baris kehadiran dibuat baru, jam masuk mengisi menyusul.
         $r = absensi_scan_admin($this->pdo, 'STUDENT2', 'sholat', '2026-08-17 12:00:00');
-        $this->assertSame('error', $r['status']);
-        $this->assertStringContainsString('belum absen Hadir', $r['message']);
+        $this->assertSame('success', $r['status']);
+        $this->assertSame('Sholat', $r['jenis']);
+        $row = $this->pdo->query("SELECT * FROM attendance WHERE student_id = 2 AND date = '2026-08-17'")->fetch();
+        $this->assertNotFalse($row);
+        $this->assertSame('12:00:00', $row['time_sholat']);
+        $this->assertNull($row['time_in']); // belum absen Hadir
+        $this->assertSame('Hadir', $row['status']);
+    }
+
+    public function testHadirSetelahSholatMelengkapiWaktuMasuk(): void
+    {
+        // Alur fleksibel: sholat dulu (tanpa hadir), lalu hadir menyusul
+        // pada hari yang sama — time_in terisi tanpa menghapus time_sholat.
+        absensi_scan_admin($this->pdo, 'STUDENT2', 'sholat', '2026-08-17 12:00:00');
+        $r = absensi_scan_admin($this->pdo, 'STUDENT2', 'hadir', '2026-08-17 13:05:00');
+        $this->assertSame('success', $r['status']);
+        $this->assertSame('Hadir', $r['jenis']);
+        $row = $this->pdo->query("SELECT * FROM attendance WHERE student_id = 2 AND date = '2026-08-17'")->fetch();
+        $this->assertSame('13:05:00', $row['time_in']);
+        $this->assertSame('12:00:00', $row['time_sholat']);
     }
 
     public function testTypeTidakDikenalDianggapHadir(): void
