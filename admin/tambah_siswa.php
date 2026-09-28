@@ -3,6 +3,8 @@
 
 session_start();
 require_once '../config/database.php';
+require_once '../lib/core.php';
+
 
 // Pastikan hanya admin yang bisa mengakses
 if (!isset($_SESSION['role']) || $_SESSION['role'] !== 'admin') {
@@ -66,86 +68,9 @@ function absensi_save_photo($src, $nisn)
     return $ok ? 'assets/foto_siswa/' . $foto_name : '';
 }
 
-/**
- * Membaca file spreadsheet menjadi array baris.
- * Mendukung .xlsx (ZIP berisi XML — di-parse langsung, tanpa Composer) dan .csv/.txt.
- * @param string $file Parser: jalur file yang diunggah
- * @param string $ext  Ekstensi file (xlsx / csv / txt)
- * @return array Array baris (masing-masing array kolom)
- */
-function absensi_spreadsheet_rows($file, $ext)
-{
-    $ext = strtolower($ext);
-    $rows = [];
-    if ($ext === 'xlsx') {
-        $zip = new ZipArchive();
-        if ($zip->open($file) !== true) return $rows;
-
-        // Muat shared strings (teks di Excel sering disimpan di sini, dirujuk via indeks)
-        $shared = [];
-        if ($ssXml = $zip->getFromName('xl/sharedStrings.xml')) {
-            $ssXml = preg_replace('/xmlns(:[a-z0-9]+)?="[^"]*"/i', '', $ssXml);
-            $ss = @simplexml_load_string($ssXml);
-            if ($ss) foreach ($ss->si ?? [] as $si) {
-                $t = '';
-                foreach ($si->t ?? [] as $tt) $t .= (string)$tt;
-                $shared[] = $t;
-            }
-        }
-
-        // Sheet pertama biasanya xl/worksheets/sheet1.xml (fallback cari sheet pertama)
-        $sheet = null;
-        for ($i = 1; $i <= 20; $i++) {
-            $name = 'xl/worksheets/sheet' . $i . '.xml';
-            if ($zip->getFromName($name) !== false) { $sheet = $name; break; }
-        }
-        if (!$sheet) { $zip->close(); return $rows; }
-        $xml = $zip->getFromName($sheet);
-        $zip->close();
-
-        // Hapus deklarasi namespace default agar SimpleXML bisa mengakses elemen langsung
-        $xml = preg_replace('/xmlns(:[a-z0-9]+)?="[^"]*"/i', '', $xml);
-
-        $sx = @simplexml_load_string($xml);
-        if (!$sx) return $rows;
-        // Batasi jumlah baris yang diproses (anti-macet untuk file sangat besar/rusak)
-        $max_rows = 5000;
-        // Baris berada di dalam <sheetData>, bukan anak langsung <worksheet>
-        $sheetData = $sx->sheetData ?? $sx;
-        foreach ($sheetData->row ?? [] as $row) {
-            if (count($rows) >= $max_rows) break;
-            $cols = [];
-            foreach ($row->c ?? [] as $cell) {
-                $type = (string)($cell['t'] ?? '');
-                // Tandai sel ANGKA: tanpa atribut t (default "n") atau t="n".
-                // Dipakai aplikasi untuk memulihkan nol depan NISN yang dibuang Excel.
-                if ($type === '' || $type === 'n') {
-                    $cols[] = ['v' => isset($cell->v) ? trim((string)$cell->v) : '', 'num' => true];
-                } elseif ($type === 'inlineStr') {
-                    $cols[] = ['v' => trim((string)$cell->is->t), 'num' => false];
-                } elseif ($type === 's' && isset($cell->v)) {
-                    $idx = (int)trim((string)$cell->v);
-                    $cols[] = ['v' => $shared[$idx] ?? '', 'num' => false];
-                } else {
-                    $cols[] = ['v' => isset($cell->v) ? trim((string)$cell->v) : '', 'num' => false];
-                }
-            }
-            $rows[] = $cols;
-        }
-    } else {
-        // CSV / TXT: deteksi delimiter seperti proses utama
-        $h = fopen($file, 'r');
-        if (!$h) return $rows;
-        $first = fgets($h); rewind($h);
-        $delim = (substr_count($first, ';') >= substr_count($first, ',')) ? ';' : ',';
-        while (($r = fgetcsv($h, 0, $delim)) !== false) {
-            if (count($rows) >= 5000) break;
-            $rows[] = $r;
-        }
-        fclose($h);
-    }
-    return $rows;
-}
+// Catatan: parsing spreadsheet (.xlsx / .csv) kini berada di lib/core.php
+// -> absensi_spreadsheet_rows() supaya logika kolom dapat diuji otomatis
+// (lihat tests/SpreadsheetImportTest.php).
 
 /**
  * Normalisasi NISN — APLIKASI yang mengubah angka menjadi teks.
@@ -459,9 +384,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_FILES['file_zip']) || isse
                 $jenis_kelamin = null;
             }
 
-            if (empty($nisn) || empty($name) || empty($class)) {
+            // Baris tanpa kelas SENGAJA dilewati: tidak diimport & tidak membuat
+            // kelas baru (aturan ini diuji di tests/SpreadsheetImportTest.php).
+            $alasan = absensi_import_row_reason($nisn, $name, $class);
+            if ($alasan !== 'ok') {
                 $gagal++;
-                $row_errors[] = "Baris $baris: kolom tidak lengkap / NISN tidak valid (NISN, Nama, Kelas wajib diisi).";
+                if ($alasan === 'kelas_kosong') {
+                    $row_errors[] = "Baris $baris: <strong>$nisn</strong> — kolom Kelas kosong, siswa <strong>dilewati</strong> (tidak diimpor).";
+                } else {
+                    $row_errors[] = "Baris $baris: kolom tidak lengkap / NISN tidak valid (NISN, Nama, Kelas wajib diisi).";
+                }
                 continue;
             }
 

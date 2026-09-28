@@ -343,4 +343,146 @@ if (!function_exists('absensi_is_terlambat')) {
             return false;
         }
     }
+
+
+    /**
+     * Menentukan alasan sebuah baris import masal siswa diterima/ditolak.
+     * Aturan aplikasi: NISN, Nama, dan Kelas WAJIB ada. Baris TANPA KELAS
+     * (mis. sel "Kelas" kosong di Excel) DILEWATI — tidak diimport dan tidak
+     * membuat kelas baru di tabel kelas.
+     * @param string $nisn  NISN hasil normalisasi
+     * @param string $name  Nama siswa
+     * @param string $class Kelas siswa
+     * @return string 'ok' | 'kelas_kosong' | 'tidak_lengkap'
+     */
+    function absensi_import_row_reason($nisn, $name, $class)
+    {
+        $nisn = trim((string)$nisn);
+        $name = trim((string)$name);
+        $class = trim((string)$class);
+        if ($nisn === '' || $name === '') return 'tidak_lengkap';
+        if ($class === '') return 'kelas_kosong';
+        return 'ok';
+    }
+
+    /**
+     * Mengubah referensi kolom Excel (A, B, ... Z, AA, ...) menjadi indeks 0-based.
+     * Dipakai agar sel KOSONG — yang oleh Excel dihilangkan dari XML — tidak
+     * membuat kolom setelahnya bergeser posisi.
+     * @param string $ref Referensi sel/kolom, mis. "C5" atau "AA"
+     * @return int|null Indeks kolom 0-based, atau null bila referensi tidak valid
+     */
+    function absensi_excel_col_index($ref)
+    {
+        $letters = preg_replace('/[^A-Za-z]/', '', (string)$ref);
+        if ($letters === '') return null;
+        $letters = strtoupper($letters);
+        $idx = 0;
+        for ($i = 0, $n = strlen($letters); $i < $n; $i++) {
+            $idx = $idx * 26 + (ord($letters[$i]) - 64);
+        }
+        return $idx - 1;
+    }
+
+    /**
+     * Membaca file spreadsheet menjadi array baris.
+     * Mendukung .xlsx (ZIP berisi XML, di-parse langsung tanpa Composer) dan .csv/.txt.
+     *
+     * PENTING — perbaikan bug "kolom bergeser": pada .xlsx, Excel MENGHILANGKAN sel
+     * kosong dari XML (mis. kolom "Kelas" yang tidak diisi). Parser ini menempatkan
+     * tiap sel pada indeks kolom sesuai referensinya (r="C5"), sehingga kolom tidak
+     * bergeser: baris siswa tanpa kelas tetap terbaca "Kelas kosong" dan bisa
+     * dilewati saat import (tidak terimport & tidak membuat kelas baru).
+     *
+     * @param string $file Parser: jalur file yang diunggah
+     * @param string $ext  Ekstensi file (xlsx / csv / txt)
+     * @return array Array baris (masing-masing array kolom)
+     */
+    function absensi_spreadsheet_rows($file, $ext)
+    {
+        $ext = strtolower($ext);
+        $rows = [];
+        if ($ext === 'xlsx') {
+            $zip = new ZipArchive();
+            if ($zip->open($file) !== true) return $rows;
+
+            // Muat shared strings (teks di Excel sering disimpan di sini, dirujuk via indeks)
+            $shared = [];
+            if ($ssXml = $zip->getFromName('xl/sharedStrings.xml')) {
+                $ssXml = preg_replace('/xmlns(:[a-z0-9]+)?="[^"]*"/i', '', $ssXml);
+                $ss = @simplexml_load_string($ssXml);
+                if ($ss) foreach ($ss->si ?? [] as $si) {
+                    $t = '';
+                    foreach ($si->t ?? [] as $tt) $t .= (string)$tt;
+                    $shared[] = $t;
+                }
+            }
+
+            // Sheet pertama biasanya xl/worksheets/sheet1.xml (fallback cari sheet pertama)
+            $sheet = null;
+            for ($i = 1; $i <= 20; $i++) {
+                $name = 'xl/worksheets/sheet' . $i . '.xml';
+                if ($zip->getFromName($name) !== false) { $sheet = $name; break; }
+            }
+            if (!$sheet) { $zip->close(); return $rows; }
+            $xml = $zip->getFromName($sheet);
+            $zip->close();
+
+            // Hapus deklarasi namespace default agar SimpleXML bisa mengakses elemen langsung
+            $xml = preg_replace('/xmlns(:[a-z0-9]+)?="[^"]*"/i', '', $xml);
+
+            $sx = @simplexml_load_string($xml);
+            if (!$sx) return $rows;
+            // Batasi jumlah baris yang diproses (anti-macet untuk file sangat besar/rusak)
+            $max_rows = 5000;
+            // Baris berada di dalam <sheetData>, bukan anak langsung <worksheet>
+            $sheetData = $sx->sheetData ?? $sx;
+            foreach ($sheetData->row ?? [] as $row) {
+                if (count($rows) >= $max_rows) break;
+                $cols = [];
+                foreach ($row->c ?? [] as $cell) {
+                    $type = (string)($cell['t'] ?? '');
+                    // Tandai sel ANGKA: tanpa atribut t (default "n") atau t="n".
+                    // Dipakai aplikasi untuk memulihkan nol depan NISN yang dibuang Excel.
+                    if ($type === '' || $type === 'n') {
+                        $val = ['v' => isset($cell->v) ? trim((string)$cell->v) : '', 'num' => true];
+                    } elseif ($type === 'inlineStr') {
+                        $val = ['v' => trim((string)$cell->is->t), 'num' => false];
+                    } elseif ($type === 's' && isset($cell->v)) {
+                        $idx = (int)trim((string)$cell->v);
+                        $val = ['v' => $shared[$idx] ?? '', 'num' => false];
+                    } else {
+                        $val = ['v' => isset($cell->v) ? trim((string)$cell->v) : '', 'num' => false];
+                    }
+
+                    // Sel kosong dihilangkan Excel dari XML. Tempatkan nilai pada posisi
+                    // kolom menurut referensinya (r="C5") dan tutup celah dengan kolom
+                    // kosong agar kolom berikutnya TIDAK bergeser satu pun.
+                    $ci = absensi_excel_col_index((string)($cell['r'] ?? ''));
+                    if ($ci === null) {
+                        $cols[] = $val; // referensi sel tidak ada: pakai urutan kemunculan
+                    } else {
+                        while (count($cols) < $ci) {
+                            $cols[] = ['v' => '', 'num' => false];
+                        }
+                        $cols[$ci] = $val;
+                    }
+                }
+                $rows[] = $cols;
+            }
+        } else {
+            // CSV / TXT: fgetcsv mempertahankan kolom kosong (",,"), posisi kolom sudah aman.
+            $h = fopen($file, 'r');
+            if (!$h) return $rows;
+            $first = fgets($h); rewind($h);
+            $delim = (substr_count($first, ';') >= substr_count($first, ',')) ? ';' : ',';
+            while (($r = fgetcsv($h, 0, $delim)) !== false) {
+                if (count($rows) >= 5000) break;
+                $rows[] = $r;
+            }
+            fclose($h);
+        }
+        return $rows;
+    }
+
 }
