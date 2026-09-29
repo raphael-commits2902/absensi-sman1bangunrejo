@@ -357,6 +357,13 @@ if (!function_exists('absensi_is_terlambat')) {
      */
     function absensi_qr_png($data, $outfile, $size = 8, $margin = 2)
     {
+        // Data kosong/rong: QRcode::png('') gagal ("empty string") dan menulis
+        // file log error <outfile>-errors.txt ke lib/ — tolak di sini sehingga
+        // tidak ada error/log yang ditulis (pelindung untuk semua pemanggil,
+        // mis. download_qr.php yang bisa berhadapan dengan NISN kosong).
+        if (trim((string)$data) === '') {
+            return false;
+        }
         static $loaded = false;
         if (!$loaded) {
             require_once dirname(__FILE__) . '/qrlib.php';

@@ -1,5 +1,10 @@
 <?php
-session_start();
+// Guard: bila sesi sudah aktif (mis. auto-start atau file ini di-include),
+// jangan memanggil session_start() lagi agar tidak memunculkan notice
+// "Ignoring session_start() because a session is already active".
+if (session_status() !== PHP_SESSION_ACTIVE) {
+    session_start();
+}
 require_once '../config/database.php';
 require_once '../lib/fpdf.php';
 require_once '../lib/core.php';

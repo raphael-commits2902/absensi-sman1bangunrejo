@@ -41,4 +41,21 @@ class QrTest extends TestCase
         $bad = 'Z:\\tidak_ada_dir\\' . uniqid() . '.png';
         $this->assertFalse(absensi_qr_png('TOKEN', $bad));
     }
+
+    public function testQrDataKosongDitolakTanpaMenulisLogError(): void
+    {
+        // Data kosong/rong ditolak di fungsi inti: menghasilkan false,
+        // tidak membuat file PNG, dan TIDAK menulis file log error di lib/
+        // (QRcode::png('') akan gagal dan membuat <file>-errors.txt).
+        $tmp = sys_get_temp_dir() . '/qr_empty_' . uniqid() . '.png';
+        try {
+            $this->assertFalse(absensi_qr_png('', $tmp));
+            $this->assertFalse(absensi_qr_png('   ', $tmp));
+            $this->assertFileDoesNotExist($tmp);
+            $errFiles = glob(__DIR__ . '/../lib/*-errors.txt');
+            $this->assertSame([], $errFiles ?: [], 'Tidak boleh ada file log error di lib/');
+        } finally {
+            @unlink($tmp);
+        }
+    }
 }
