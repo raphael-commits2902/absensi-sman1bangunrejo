@@ -104,12 +104,29 @@ if (!empty($filter_class)) {
             .id-card .card-body { flex-wrap: wrap; }
         }
         
-        /* Khusus Print: kartu tetap ukuran KTP 85.6 x 54mm */
+        /* Khusus Print: kertas A4 penuh tanpa margin browser — agar lebar
+           cetak 210mm selalu cukup untuk 2 kartu (2 x 85.6mm + gap ~173mm)
+           dan TIDAK memicu "fit/shrink-to-page": kartu tercetak 1:1 KTP. */
+        @page { size: A4; margin: 0; }
         @media print {
             body { background: white; }
-            .toolbar, .info-bar { display: none !important; }
-            .cards-grid { max-width: 100%; margin: 0; padding: 0; gap: 8px; }
-            .id-card { box-shadow: none; border: 1.13px solid #000; border-radius: 0; }
+            .toolbar, .info-bar, .empty-state, footer { display: none !important; }
+            /* Grid presisi cetak: 2 kolom PAS selebar kartu KTP, terpusat di
+               kertas; padding dalam menggantikan margin browser (@page margin 0). */
+            .cards-grid {
+                max-width: none; width: 100%;
+                margin: 0; padding: 12mm 15mm;
+                grid-template-columns: repeat(2, 85.6mm);
+                gap: 2.5mm;
+                justify-content: center;
+            }
+            /* Ukuran KTP 1:1 — sama persis dengan sisi belakang pada PDF
+               hasil download (85.60 x 53.98 mm). */
+            .id-card {
+                width: 85.6mm; height: 53.98mm;
+                box-shadow: none; border: 1.13px solid #000; border-radius: 0;
+                page-break-inside: avoid; break-inside: avoid;
+            }
         }
     </style>
 </head>
@@ -125,6 +142,7 @@ if (!empty($filter_class)) {
                 <?php endforeach; ?>
             </select>
             <button class="btn-print" onclick="window.print()"><i class="fa-solid fa-print"></i> Cetak Kartu</button>
+            <span title="Agar ukuran kartu tepat KTP (85.6 x 53.98 mm), pastikan skala cetak di dialog printer = 100% / Actual size." style="font-size: 11px; color: #94a3b8; display: flex; align-items: center; gap: 6px;"><i class="fa-solid fa-circle-info" style="color: #3b82f6;"></i> Skala cetak: 100% (Actual size)</span>
             <?php if(!empty($filter_class) && !empty($students)): ?>
                 <a class="btn-download" href="unduh_kartu?filter_class=<?= urlencode($filter_class) ?>"><i class="fa-solid fa-file-pdf"></i> Download PDF</a>
             <?php endif; ?>
