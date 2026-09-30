@@ -332,7 +332,9 @@ if (empty($jam_batas)) $jam_batas = '';
                     <div style="font-size:14px;color:${terlambat ? '#d97706' : '#64748b'};">Pukul ${time} WIB${terlambat ? ` (melewati batas ${batas})` : ''}</div>
                 `,
                 icon: terlambat ? 'warning' : 'success',
-                showConfirmButton: true,
+                showConfirmButton: false,
+                timer: 2200,
+                timerProgressBar: true,
                 confirmButtonText: 'OK',
                 confirmButtonColor: '#10b981',
                 width: 380
@@ -343,13 +345,50 @@ if (empty($jam_batas)) $jam_batas = '';
         }
 
         // Proses token QR (dipakai kamera & scanner alat sama-sama)
+        // Beep offline via WebAudio — instan tanpa unduh audio dari URL
+        // eksternal (soundjay) yang bisa lambat/blokir di jaringan sekolah.
+        let _audioCtx = null;
+        function playBeep() {
+            try {
+                _audioCtx = _audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+                if (_audioCtx.state === 'suspended') _audioCtx.resume();
+                const o = _audioCtx.createOscillator();
+                const g = _audioCtx.createGain();
+                o.type = 'square';
+                o.frequency.value = 1600;
+                g.gain.setValueAtTime(0.0001, _audioCtx.currentTime);
+                g.gain.exponentialRampToValueAtTime(0.12, _audioCtx.currentTime + 0.01);
+                g.gain.exponentialRampToValueAtTime(0.0001, _audioCtx.currentTime + 0.18);
+                o.connect(g); g.connect(_audioCtx.destination);
+                o.start(); o.stop(_audioCtx.currentTime + 0.2);
+            } catch (e) {}
+        }
+
+        // QR yang terbaca saat proses berjalan TIDAK dibuang — diantre dan
+        // langsung diproses begitu scanner aktif kembali (scan 1 -> 2 cepat).
+        let lastToken = '', lastTokenAt = 0, pendingToken = null;
+        function resumeScanning() {
+            isScanning = true;
+            if (currentMode === 'scanner') document.getElementById('scannerInput').focus();
+            if (pendingToken) {
+                const t = pendingToken;
+                pendingToken = null;
+                processToken(t);
+            }
+        }
+
         function processToken(token) {
-            if (!isScanning) return; // Mencegah scan ganda saat loading
+            if (!isScanning) { pendingToken = token; return; }
+            const now = Date.now();
+            // QR yang sama masih di frame kamera -> abaikan (cegah kirim dobel)
+            if (token === lastToken && now - lastTokenAt < 1200) return;
             isScanning = false;
+            lastToken = token;
+            lastTokenAt = now;
+            const started = now;
 
             // Suara beep
-            let audio = new Audio('https://www.soundjay.com/button/beep-07.wav');
-            audio.play().catch(() => {});
+            playBeep();
 
             // Kirim data ke backend
             fetch('proses_scan.php', {
@@ -363,17 +402,15 @@ if (empty($jam_batas)) $jam_batas = '';
                     showSuccessAlert(data);
                     addToHistory(data);
                 } else {
-                    Swal.fire('Gagal!', data.message, 'error');
+                    Swal.fire({ title: 'Gagal!', text: data.message, icon: 'error', timer: 2000, showConfirmButton: false });
                 }
-                // Jeda 3 detik sebelum bisa scan lagi, lalu refocus input scanner
-                setTimeout(() => {
-                    isScanning = true;
-                    if (currentMode === 'scanner') document.getElementById('scannerInput').focus();
-                }, 3000);
+                // Aktifkan kembali secepatnya: total minimal ~600ms per scan
+                // (dulu 3 detik tetap — inilah penyebab scan ke-2 lambat).
+                setTimeout(resumeScanning, Math.max(0, 600 - (Date.now() - started)));
             })
             .catch(() => {
-                Swal.fire('Error', 'Kesalahan koneksi jaringan!', 'error');
-                isScanning = true;
+                Swal.fire({ title: 'Error', text: 'Kesalahan koneksi jaringan!', icon: 'error', timer: 2000, showConfirmButton: false });
+                setTimeout(resumeScanning, 600);
             });
         }
 
@@ -383,7 +420,22 @@ if (empty($jam_batas)) $jam_batas = '';
 
         // Mode aktif saat ini
         let currentMode = 'camera';
-        let html5QrcodeScanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: {width: 250, height: 250} }, false);
+        // Scanner dioptimalkan agar QR cepat terbaca, termasuk dari jarak:
+        // fps 15, resolusi ideal 720p, area QR adaptif (mengikuti ukuran frame).
+        let html5QrcodeScanner = new Html5QrcodeScanner("reader", {
+            fps: 15,
+            qrbox: function(width, height) {
+                const size = Math.max(180, Math.min(450, Math.floor(Math.min(width, height) * 0.75)));
+                return { width: size, height: size };
+            },
+            disableFlip: false,
+            rememberLastUsedCamera: true,
+            videoConstraints: {
+                facingMode: { ideal: 'environment' },
+                width: { ideal: 1280 },
+                height: { ideal: 720 }
+            }
+        }, false);
         html5QrcodeScanner.render(onScanSuccess);
 
         function setMode(mode) {
