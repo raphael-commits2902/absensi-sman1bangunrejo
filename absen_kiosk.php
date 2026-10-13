@@ -30,18 +30,23 @@ if (!$adalah_admin && !$kiosk_terbuka) {
         } elseif ($pin === '') {
             $pin_error = 'Masukkan PIN.';
         } else {
-            $hash = $pdo->query("SELECT pin_hash FROM kiosk_pin ORDER BY id DESC LIMIT 1")->fetchColumn();
-            if ($hash && password_verify($pin, $hash)) {
+            // Tabel & query diamankan: tidak ada lagi fatal error bila kiosk_pin belum ada.
+            absensi_kiosk_ensure_table($pdo);
+            if (!absensi_kiosk_has_pin($pdo)) {
+                $pin_error = 'PIN kiosk belum pernah diatur. Silakan login sebagai admin, lalu tekan "Atur PIN Kiosk" di halaman pos absen.';
+            } elseif (absensi_kiosk_verify_pin($pdo, $pin)) {
                 $_SESSION['kiosk_unlocked'] = true;
                 $_SESSION['kiosk_tries'] = [];
                 session_write_close();
                 header("Location: absen_kiosk.php");
                 exit;
             }
-            $_SESSION['kiosk_tries'][] = time();
-            session_write_close();
-            $pin_error = 'PIN salah. Coba lagi.';
-            session_start();
+            if ($pin_error === '') {
+                $_SESSION['kiosk_tries'][] = time();
+                session_write_close();
+                $pin_error = 'PIN salah. Coba lagi.';
+                session_start();
+            }
         }
     }
     ?>
@@ -102,6 +107,31 @@ if (isset($_GET['action']) && $_GET['action'] === 'lock') {
     header("Location: absen_kiosk.php");
     exit;
 }
+
+// Aksi atur/ganti PIN kiosk — HANYA admin login (petugas kiosk tidak boleh)
+$pin_flash = '';
+$pin_flash_type = 'success';
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'set_pin') {
+    if (!$adalah_admin) {
+        header("Location: absen_kiosk.php");
+        exit;
+    }
+    $pin_baru = trim($_POST['pin_baru'] ?? '');
+    $pin_ulang = trim($_POST['pin_ulang'] ?? '');
+    if (!preg_match('/^[0-9]{4,12}$/', $pin_baru)) {
+        $pin_flash = 'PIN harus 4-12 digit angka.';
+        $pin_flash_type = 'error';
+    } elseif ($pin_baru !== $pin_ulang) {
+        $pin_flash = 'Konfirmasi PIN tidak sama.';
+        $pin_flash_type = 'error';
+    } elseif (absensi_kiosk_set_pin($pdo, $pin_baru)) {
+        $pin_flash = 'PIN kiosk berhasil disimpan.';
+    } else {
+        $pin_flash = 'Gagal menyimpan PIN. Coba lagi.';
+        $pin_flash_type = 'error';
+    }
+}
+$ada_pin = absensi_kiosk_has_pin($pdo);
 
 $type = isset($_GET['type']) ? trim($_GET['type']) : 'hadir';
 if (!in_array($type, ['hadir', 'pulang', 'sholat'])) $type = 'hadir';
@@ -206,6 +236,27 @@ if (empty($jam_batas)) $jam_batas = '';
 
         .kiosk-footer { text-align: center; padding: 16px; color: var(--gray); font-size: 12px; }
 
+        /* Flash atur PIN */
+        .pin-flash { max-width: 760px; margin: 16px auto 0; padding: 12px 16px; border-radius: 12px; font-size: 13px; font-weight: 700; display: flex; align-items: center; gap: 10px; border-left: 4px solid; }
+        .pin-flash-ok { background: var(--success-light); color: #065f46; border-left-color: var(--success); }
+        .pin-flash-err { background: var(--danger-light); color: #991b1b; border-left-color: var(--danger); }
+
+        /* Modal atur PIN kiosk */
+        .pin-modal-overlay { position: fixed; inset: 0; background: rgba(15,23,42,0.7); display: none; align-items: center; justify-content: center; z-index: 2000; padding: 20px; }
+        .pin-modal-overlay.open { display: flex; }
+        .pin-modal { background: white; width: 100%; max-width: 380px; border-radius: 20px; padding: 28px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); }
+        .pin-modal h3 { font-size: 17px; font-weight: 800; color: var(--dark); display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+        .pin-modal h3 i { color: var(--warning); }
+        .pin-modal p.hint { font-size: 12px; color: var(--gray); margin-bottom: 18px; line-height: 1.5; }
+        .pin-modal label { display: block; font-size: 13px; font-weight: 700; color: var(--dark-secondary); margin-bottom: 6px; }
+        .pin-modal input[type="password"] { width: 100%; padding: 13px 15px; border: 2px solid var(--border); border-radius: 12px; font-size: 18px; letter-spacing: 6px; text-align: center; outline: none; background: var(--bg-light); margin-bottom: 14px; }
+        .pin-modal input[type="password"]:focus { border-color: var(--primary); background: white; box-shadow: 0 0 0 4px rgba(59,130,246,0.15); }
+        .pin-modal-actions { display: flex; gap: 10px; margin-top: 4px; }
+        .pin-modal-actions button { flex: 1; padding: 13px; border: none; border-radius: 12px; font-size: 14px; font-weight: 800; cursor: pointer; }
+        .btn-pin-save { background: var(--primary); color: white; }
+        .btn-pin-save:hover { background: var(--primary-hover); }
+        .btn-pin-cancel { background: var(--bg-light); color: var(--dark-secondary); border: 1px solid var(--border) !important; }
+
         @media (max-width: 576px) {
             .type-tabs { grid-template-columns: 1fr; }
             .kiosk-brand h1 { font-size: 14px; }
@@ -222,8 +273,20 @@ if (empty($jam_batas)) $jam_batas = '';
             </div>
         </div>
         <a href="admin/index.php" class="kiosk-login"><i class="fa-solid fa-gauge"></i> Dashboard</a>
+        <?php if ($adalah_admin): ?>
+        <button type="button" class="kiosk-login" id="btnOpenPinModal" style="cursor:pointer; font-family:inherit; background:none;">
+            <i class="fa-solid fa-key"></i> <?= $ada_pin ? 'Ganti PIN Kiosk' : 'Atur PIN Kiosk' ?>
+        </button>
+        <?php endif; ?>
         <a href="absen_kiosk.php?action=lock" class="kiosk-login" style="border-color: #7f1d1d; color: #fca5a5;"><i class="fa-solid fa-lock"></i> Kunci Kiosk</a>
     </header>
+
+    <?php if ($pin_flash !== ''): ?>
+        <div class="pin-flash <?= $pin_flash_type === 'success' ? 'pin-flash-ok' : 'pin-flash-err' ?>" id="pinFlash">
+            <i class="fa-solid <?= $pin_flash_type === 'success' ? 'fa-circle-check' : 'fa-triangle-exclamation' ?>"></i>
+            <?= htmlspecialchars($pin_flash) ?>
+        </div>
+    <?php endif; ?>
 
     <div class="kiosk-wrap">
         <!-- Pilihan jenis absen -->
@@ -287,6 +350,55 @@ if (empty($jam_batas)) $jam_batas = '';
     </div>
 
     <footer class="kiosk-footer">Absensi SMAN 1 Bangunrejo &copy; <?= date('Y') ?></footer>
+
+    <?php if ($adalah_admin): ?>
+    <!-- Modal atur/ganti PIN kiosk (hanya admin) -->
+    <div class="pin-modal-overlay" id="pinModal">
+        <div class="pin-modal">
+            <h3><i class="fa-solid fa-key"></i> <?= $ada_pin ? 'Ganti PIN Kiosk' : 'Atur PIN Kiosk' ?></h3>
+            <p class="hint">PIN dibutuhkan petugas untuk membuka pos absen tanpa login. Gunakan 4-12 digit angka yang mudah diingat petugas, tapi sulit ditebak orang lain.</p>
+            <form method="POST" action="absen_kiosk.php" id="pinForm">
+                <input type="hidden" name="action" value="set_pin">
+                <label for="pinBaru">PIN Baru</label>
+                <input type="password" name="pin_baru" id="pinBaru" inputmode="numeric" pattern="[0-9]*" maxlength="12" placeholder="••••" required autocomplete="off">
+                <label for="pinUlang">Ulangi PIN</label>
+                <input type="password" name="pin_ulang" id="pinUlang" inputmode="numeric" pattern="[0-9]*" maxlength="12" placeholder="••••" required autocomplete="off">
+                <div class="pin-modal-actions">
+                    <button type="button" class="btn-pin-cancel" id="btnClosePinModal">Batal</button>
+                    <button type="submit" class="btn-pin-save">Simpan PIN</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    <script>
+        (function() {
+            const overlay = document.getElementById('pinModal');
+            document.getElementById('btnOpenPinModal').addEventListener('click', function() {
+                overlay.classList.add('open');
+                document.getElementById('pinBaru').focus();
+            });
+            document.getElementById('btnClosePinModal').addEventListener('click', function() {
+                overlay.classList.remove('open');
+            });
+            overlay.addEventListener('click', function(e) {
+                if (e.target === overlay) overlay.classList.remove('open');
+            });
+            document.getElementById('pinForm').addEventListener('submit', function(e) {
+                const a = document.getElementById('pinBaru').value;
+                const b = document.getElementById('pinUlang').value;
+                if (!/^[0-9]{4,12}$/.test(a)) {
+                    e.preventDefault();
+                    alert('PIN harus 4-12 digit angka.');
+                    return;
+                }
+                if (a !== b) {
+                    e.preventDefault();
+                    alert('Konfirmasi PIN tidak sama.');
+                }
+            });
+        })();
+    </script>
+    <?php endif; ?>
 
     <script>
         let isScanning = true;

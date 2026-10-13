@@ -518,4 +518,84 @@ if (!function_exists('absensi_is_terlambat')) {
         return $rows;
     }
 
+    /**
+     * Memastikan tabel kiosk_pin tersedia (idempotent — aman dipanggil tiap request).
+     * Tabel ini menyimpan hash PIN pos absen; tanpanya halaman kiosk error fatal.
+     * @param PDO $pdo
+     * @return void
+     */
+    function absensi_kiosk_ensure_table($pdo)
+    {
+        try {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS kiosk_pin (
+                id INT(11) NOT NULL AUTO_INCREMENT,
+                pin_hash VARCHAR(255) NOT NULL,
+                updated_at TIMESTAMP NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+                PRIMARY KEY (id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        } catch (PDOException $e) {
+            // Abaikan bila tidak ada hak CREATE — query berikutnya yang menentukan.
+        }
+    }
+
+    /**
+     * Menyimpan / mengganti PIN kiosk (selalu satu baris aktif, di-hash).
+     * @param PDO    $pdo
+     * @param string $pin  4-12 digit angka
+     * @return bool true bila berhasil
+     */
+    function absensi_kiosk_set_pin($pdo, $pin)
+    {
+        $pin = trim((string)$pin);
+        if (!preg_match('/^[0-9]{4,12}$/', $pin)) {
+            return false;
+        }
+        absensi_kiosk_ensure_table($pdo);
+        try {
+            $hash = password_hash($pin, PASSWORD_DEFAULT);
+            $pdo->beginTransaction();
+            $pdo->exec("DELETE FROM kiosk_pin");
+            $stmt = $pdo->prepare("INSERT INTO kiosk_pin (pin_hash) VALUES (?)");
+            $stmt->execute([$hash]);
+            $pdo->commit();
+            return true;
+        } catch (PDOException $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            return false;
+        }
+    }
+
+    /**
+     * Apakah PIN kiosk sudah pernah diatur?
+     * @param PDO $pdo
+     * @return bool
+     */
+    function absensi_kiosk_has_pin($pdo)
+    {
+        absensi_kiosk_ensure_table($pdo);
+        try {
+            return (bool)$pdo->query("SELECT COUNT(*) FROM kiosk_pin")->fetchColumn();
+        } catch (PDOException $e) {
+            return false;
+        }
+    }
+
+    /**
+     * Memverifikasi PIN kiosk. false bila salah ATAU belum pernah diatur.
+     * @param PDO    $pdo
+     * @param string $pin
+     * @return bool
+     */
+    function absensi_kiosk_verify_pin($pdo, $pin)
+    {
+        absensi_kiosk_ensure_table($pdo);
+        try {
+            $hash = $pdo->query("SELECT pin_hash FROM kiosk_pin ORDER BY id DESC LIMIT 1")->fetchColumn();
+        } catch (PDOException $e) {
+            return false;
+        }
+        if (!$hash) return false;
+        return password_verify(trim((string)$pin), $hash);
+    }
+
 }

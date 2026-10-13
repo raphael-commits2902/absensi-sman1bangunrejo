@@ -45,7 +45,7 @@ class TestDb
     {
         $pdo = self::pdo();
         $pdo->exec('SET FOREIGN_KEY_CHECKS=0');
-        foreach (['attendance', 'guru', 'students', 'users', 'kelas', 'waktu_absensi'] as $t) {
+        foreach (['attendance', 'guru', 'students', 'users', 'kelas', 'waktu_absensi', 'kiosk_pin'] as $t) {
             $pdo->exec("TRUNCATE TABLE `$t`");
         }
         $pdo->exec('SET FOREIGN_KEY_CHECKS=1');
@@ -155,6 +155,13 @@ class TestDb
                 `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
                 PRIMARY KEY (`id`),
                 UNIQUE KEY `name` (`name`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+
+            "CREATE TABLE IF NOT EXISTS `kiosk_pin` (
+                `id` int(11) NOT NULL AUTO_INCREMENT,
+                `pin_hash` varchar(255) NOT NULL,
+                `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+                PRIMARY KEY (`id`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
         ];
     }
