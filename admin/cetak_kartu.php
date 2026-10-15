@@ -22,6 +22,12 @@ if (!empty($filter_class)) {
     $stmt->execute([$filter_class]);
     $students = $stmt->fetchAll();
 }
+
+// Chunk 8 kartu per halaman A4 (2 kolom x 4 baris pada tata letak cetak).
+// Halaman depan & belakang disusun berselang-seling per chunk dengan urutan
+// siswa yang sama persis — sejajar 1:1 saat dicetak duplex (konsisten dengan
+// PDF unduh_kartu.php yang memakai urutan sama, $duplex = 'none').
+$card_pages = array_chunk($students, 8);
 ?>
 <!DOCTYPE html>
 <html lang="id">
@@ -93,7 +99,36 @@ if (!empty($filter_class)) {
         /* Blok tanda tangan Kepala Sekolah (kanan bawah) — gambar memuat cap + nama + NIP */
         .id-card .card-ttd { position: absolute; right: 1mm; bottom: 2mm; text-align: right; z-index: 2; line-height: 1.25; }
         .id-card .card-ttd img { height: 15mm; width: auto; display: inline-block; margin: 0.2mm 0; }
-        
+
+        /* ===== Kop halaman cetak (header atas) ===== */
+        .print-header { max-width: 1000px; margin: 20px auto 0; padding: 14px 20px; background: white; border-radius: 12px; box-shadow: 0 4px 14px rgba(0,0,0,0.08); display: flex; align-items: center; justify-content: space-between; gap: 14px; text-align: center; flex-wrap: wrap; }
+        .print-header .ph-logo { width: 15mm; height: 15mm; object-fit: contain; flex-shrink: 0; }
+        .print-header .ph-text { min-width: 0; }
+        .print-header .ph-line1 { font-size: 12px; font-weight: 600; color: #475569; text-transform: uppercase; letter-spacing: 0.6px; }
+        .print-header .ph-line2 { font-size: 20px; font-weight: 800; color: #0f172a; letter-spacing: 1.5px; text-transform: uppercase; margin-top: 2px; }
+        .print-header .ph-line3 { font-size: 11px; color: #64748b; margin-top: 2px; }
+        .print-header .ph-title { display: inline-block; margin-top: 7px; background: #0f172a; color: #ffffff; font-size: 12px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; padding: 5px 14px; border-radius: 999px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+        /* Label "Sisi Belakang" (hanya tampil di layar, tidak ikut tercetak) */
+        .side-label { max-width: 1000px; margin: 18px auto 6px; padding: 0 20px; font-size: 13px; font-weight: 800; color: #1e3a8a; text-transform: uppercase; letter-spacing: 1.2px; display: flex; align-items: center; gap: 8px; }
+        .side-label i { color: #3b82f6; }
+
+        /* ===== Kartu sisi BELAKANG — mirror desain PDF (unduh_kartu.php):
+               banner biru miring + logo, teks pengembalian, QR besar NISN,
+               band bawah "BERLAKU SELAMA...", bingkai biru. ===== */
+        .id-card.id-card-back { background: linear-gradient(rgba(30,107,184,0.07), rgba(30,107,184,0.07)), #ffffff; border: 0.5mm solid #1e6bb8; }
+        .id-card-back .bk-banner { position: absolute; top: 0; left: 0; width: 100%; height: 9mm; background: #1e6bb8; clip-path: polygon(0 0, calc(100% - 5.5mm) 0, 100% 100%, 0 100%); z-index: 1; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        .id-card-back .bk-slash1 { position: absolute; top: 0; left: calc(100% - 8mm); width: 1.5mm; height: 9mm; background: #4fc3f7; transform: skewX(24deg); transform-origin: top left; }
+        .id-card-back .bk-slash2 { position: absolute; top: 0; left: calc(100% - 6.2mm); width: 0.6mm; height: 9mm; background: #90caf9; transform: skewX(34deg); transform-origin: top left; }
+        .id-card-back .bk-logo { position: absolute; top: 1mm; left: 50%; transform: translateX(-50%); width: 7mm; height: 7mm; object-fit: contain; z-index: 2; }
+        .id-card-back .bk-msg { position: absolute; top: 9.8mm; left: 1mm; right: 1mm; text-align: center; font-size: 2.2mm; line-height: 2.2mm; color: #0f172a; font-weight: 500; overflow: hidden; z-index: 1; }
+        .id-card-back .bk-qr { position: absolute; top: 17.4mm; left: 50%; transform: translateX(-50%); width: 24mm; height: 24mm; z-index: 1; }
+        .id-card-back .bk-qr img { width: 24mm; height: 24mm; display: block; background: white; }
+        .id-card-back .bk-nisn { position: absolute; top: 41.9mm; left: 0; width: 100%; text-align: center; font-size: 3mm; line-height: 2.3mm; font-weight: 800; color: #1e6bb8; z-index: 1; }
+        .id-card-back .bk-band { position: absolute; left: 0; top: 45.5mm; width: 100%; bottom: 0; background: #1e6bb8; clip-path: polygon(0 0, 100% 0, calc(100% - 5.5mm) 100%, 0 100%); z-index: 1; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        .id-card-back .bk-band-slash { position: absolute; left: 0; top: 1.4mm; width: 100%; height: 0.8mm; background: #4fc3f7; clip-path: polygon(0 0, calc(100% - 0.91mm) 0, calc(100% - 1.43mm) 100%, 0 100%); }
+        .id-card-back .bk-valid { position: absolute; left: 0; top: 2.9mm; width: 100%; text-align: center; color: #ffffff; font-weight: 800; font-size: 2.1mm; line-height: 3mm; letter-spacing: 0.2px; }
+
         .empty-state { max-width: 1000px; margin: 40px auto; padding: 40px 20px; text-align: center; background: white; border-radius: 16px; }
         .empty-state i { font-size: 40px; color: #cbd5e1; margin-bottom: 12px; display: block; }
         .empty-state p { color: #64748b; font-size: 15px; }
@@ -110,7 +145,22 @@ if (!empty($filter_class)) {
         @page { size: A4; margin: 0; }
         @media print {
             body { background: white; }
-            .toolbar, .info-bar, .empty-state, footer { display: none !important; }
+            .toolbar, .info-bar, .empty-state, footer, .side-label { display: none !important; }
+            /* Kop halaman cetak — tinggi TETAP 22mm dipakai mengkompensasi
+               padding halaman belakang PERTAMA (offset-header) supaya kartu
+               belakang sejajar 1:1 dengan kartu depannya saat duplex. */
+            .print-header { max-width: none; margin: 0; padding: 2.5mm 15mm 0; height: 22mm; border-radius: 0; box-shadow: none; overflow: hidden; flex-wrap: nowrap; }
+            .print-header .ph-logo { width: 13mm; height: 13mm; }
+            .print-header .ph-line1 { font-size: 9px; }
+            .print-header .ph-line2 { font-size: 15px; margin-top: 1px; }
+            .print-header .ph-line3 { font-size: 8.5px; margin-top: 1px; }
+            .print-header .ph-title { font-size: 9.5px; padding: 3px 12px; margin-top: 4px; }
+            /* Setiap blok = satu lembar A4 (8 kartu): sisi depan lalu sisi
+               belakang berselang-seling → halaman cetak berpasangan. */
+            .print-page { page-break-after: always; break-after: page; page-break-inside: avoid; break-inside: avoid; }
+            .print-page.last-page { page-break-after: auto; break-after: auto; }
+            /* Halaman belakang pertama mengikuti kop (22mm) — padatkan grid-nya */
+            .print-page.offset-header .cards-grid { padding-top: calc(12mm + 22mm); }
             /* Grid presisi cetak: 2 kolom PAS selebar kartu KTP, terpusat di
                kertas; padding dalam menggantikan margin browser (@page margin 0). */
             .cards-grid {
@@ -163,13 +213,27 @@ if (!empty($filter_class)) {
             <p>Belum ada siswa terdaftar di kelas <strong><?= htmlspecialchars($filter_class) ?></strong>.</p>
         </div>
     <?php else: ?>
+        <!-- Kop halaman: tampil di layar dan ikut tercetak di atas halaman pertama -->
+        <div class="print-header">
+            <img class="ph-logo" src="../assets/logo_lampung.png" alt="Logo Provinsi Lampung">
+            <div class="ph-text">
+                <div class="ph-line1">Pemerintah Provinsi Lampung &mdash; Dinas Pendidikan dan Kebudayaan</div>
+                <div class="ph-line2">SMA Negeri 1 Bangunrejo</div>
+                <div class="ph-line3">Jalan Raya Sidorejo, Kec. Bangunrejo, Lampung Tengah</div>
+                <div class="ph-title">Kartu Pelajar &mdash; Kelas <?= htmlspecialchars($filter_class) ?> (<?= count($students) ?> siswa) &middot; Sisi Depan &amp; Belakang</div>
+            </div>
+            <img class="ph-logo" src="../assets/logo_sman1.png" alt="Logo SMAN 1 Bangunrejo">
+        </div>
+
         <div class="info-bar">
             Kelas: <strong><?= htmlspecialchars($filter_class) ?></strong> — Total <?= count($students) ?> siswa
         </div>
 
-        <!-- Preview Kartu Pelajar -->
-        <div class="cards-grid">
-            <?php foreach($students as $s): ?>
+        <?php foreach ($card_pages as $pi => $page_students): $is_last_chunk = ($pi === count($card_pages) - 1); ?>
+        <!-- Sisi DEPAN (satu blok per halaman A4) -->
+        <div class="print-page front-page">
+            <div class="cards-grid">
+            <?php foreach($page_students as $s): ?>
                 <div class="id-card">
                     <div class="card-kop">
                         <img class="kop-logo" src="../assets/logo_lampung.png" alt="Logo Provinsi Lampung">
@@ -215,7 +279,35 @@ if (!empty($filter_class)) {
                     <img class="watermark" src="../assets/logo_sman1.png" alt="">
                 </div>
             <?php endforeach; ?>
+            </div>
         </div>
+
+        <!-- Sisi BELAKANG — mengikuti langsung halaman depannya; urutan siswa
+             sama persis agar sejajar 1:1 saat dicetak duplex bolak-balik. -->
+        <div class="print-page back-page<?= $pi === 0 ? ' offset-header' : '' ?><?= $is_last_chunk ? ' last-page' : '' ?>">
+            <div class="side-label"><i class="fa-solid fa-rotate"></i> Sisi Belakang &mdash; Kelas <?= htmlspecialchars($filter_class) ?> (halaman <?= ($pi * 2) + 2 ?>)</div>
+            <div class="cards-grid">
+            <?php foreach($page_students as $s): ?>
+                <div class="id-card id-card-back">
+                    <div class="bk-banner">
+                        <span class="bk-slash1"></span>
+                        <span class="bk-slash2"></span>
+                        <img class="bk-logo" src="../assets/logo_sman1.png" alt="Logo SMAN 1 Bangunrejo">
+                    </div>
+                    <div class="bk-msg">Barang siapa yang menemukan kartu pelajar ini diharapkan dapat mengembalikan kepada pemiliknya atau menyerahkan ke SMAN 1 Bangunrejo pada alamat berikut: Jalan Raya Sidorejo, Kec. Bangunrejo, Lampung Tengah.</div>
+                    <div class="bk-qr">
+                        <img src="https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=<?= urlencode($s['nisn']) ?>" alt="QR NISN">
+                    </div>
+                    <div class="bk-nisn"><?= htmlspecialchars(!empty($s['nisn']) ? $s['nisn'] : '-') ?></div>
+                    <div class="bk-band">
+                        <span class="bk-band-slash"></span>
+                        <div class="bk-valid">BERLAKU SELAMA MENJADI PELAJAR SMAN 1 BANGUNREJO</div>
+                    </div>
+                </div>
+            <?php endforeach; ?>
+            </div>
+        </div>
+        <?php endforeach; ?>
     <?php endif; ?>
 
     <script>
